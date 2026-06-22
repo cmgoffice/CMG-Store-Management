@@ -1,0 +1,85 @@
+import { Navigate, Route, Routes } from 'react-router-dom';
+import { AppShell } from './layout/AppShell';
+import { DashboardPage } from './pages/DashboardPage';
+import { DispatchPage } from './pages/DispatchPage';
+import { ProjectListPage } from './pages/ProjectListPage';
+import { ReceivingPage } from './pages/ReceivingPage';
+import { StockListPage } from './pages/StockListPage';
+import { StorePage } from './pages/StorePage';
+import { LoginPage } from './pages/LoginPage';
+import { RegisterPage } from './pages/RegisterPage';
+import { PendingApprovalPage } from './pages/PendingApprovalPage';
+import { AdminPanel } from './pages/AdminPanel';
+import { ProtectedRoute } from './components/ProtectedRoute';
+
+export function App() {
+  return (
+    <Routes>
+      {/* Public Routes */}
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegisterPage />} />
+      
+      {/* Pending Approval Screen */}
+      <Route
+        path="/pending"
+        element={
+          <ProtectedRoute requireApproved={false}>
+            <PendingApprovalPage />
+          </ProtectedRoute>
+        }
+      />
+
+      {/* Protected Routes inside AppShell */}
+      <Route
+        path="/*"
+        element={
+          <ProtectedRoute requireApproved={true}>
+            <AppShell>
+              <Routes>
+                <Route path="/" element={<DashboardPage />} />
+                <Route
+                  path="/projects"
+                  element={
+                    <ProtectedRoute requireApproved={true} requireRoles={['MasterAdmin', 'SuperAdmin', 'Admin', 'Admin Site', 'Staff']}>
+                      <ProjectListPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/store/stock"
+                  element={
+                    <ProtectedRoute requireApproved={true} requireRoles={['MasterAdmin', 'SuperAdmin', 'Admin', 'Store Center', 'Admin Site', 'Staff']}>
+                      <StockListPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route path="/store/store" element={<StorePage />} />
+                <Route
+                  path="/store/dispatch"
+                  element={
+                    <ProtectedRoute requireApproved={true} requireRoles={['MasterAdmin', 'SuperAdmin', 'Admin', 'Store Center', 'Admin Site', 'Store Site', 'Staff']}>
+                      <DispatchPage />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route path="/receiving" element={<ReceivingPage />} />
+                
+                {/* Admin-only view */}
+                <Route
+                  path="/admin"
+                  element={
+                    <ProtectedRoute requireApproved={true} requireRoles={['MasterAdmin', 'Admin']}>
+                      <AdminPanel />
+                    </ProtectedRoute>
+                  }
+                />
+                
+                <Route path="*" element={<Navigate to="/" replace />} />
+              </Routes>
+            </AppShell>
+          </ProtectedRoute>
+        }
+      />
+    </Routes>
+  );
+}

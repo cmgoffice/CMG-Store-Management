@@ -1,0 +1,85 @@
+.tableScroll {
+  overflow-x: auto;
+  border: 0;
+  border-radius: 12px;
+  background: var(--color-panel);
+}
+
+.table {
+  width: 100%;
+  min-width: 900px;
+  border-collapse: collapse;
+}
+
+.table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #fff;
+  color: #686276;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  padding: 12px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.table td {
+  border-top: 1px solid #eeeaf6;
+  color: var(--color-text);
+  font-size: 14px;
+  line-height: 20px;
+  padding: 12px;
+  vertical-align: middle;
+}
+
+.table tbody tr:hover {
+  background: #faf8ff;
+}
+
+.numeric {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.muted {
+  color: var(--color-text-muted);
+}
+
+.itemSummary {
+  display: grid;
+  gap: 2px;
+}
+
+.itemCode {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+/* Compact table styling for maximum visibility and single-line rows */
+.table.compact th {
+  padding: 4px 8px;
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.table.compact td {
+  padding: 4px 8px;
+  font-size: 13px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.itemSummaryCompact {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.itemCodeCompact {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: normal;
+}

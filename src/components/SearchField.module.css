@@ -1,0 +1,25 @@
+.search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: min(100%, 320px);
+  border: 1px solid var(--color-outline-variant);
+  border-radius: 4px;
+  background: var(--color-panel);
+  color: var(--color-text-muted);
+  padding: 9px 12px;
+}
+
+.search:focus-within {
+  border-color: var(--color-primary-container);
+  box-shadow: 0 0 0 3px rgb(0 120 212 / 14%);
+}
+
+.search input {
+  width: 100%;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 14px;
+}

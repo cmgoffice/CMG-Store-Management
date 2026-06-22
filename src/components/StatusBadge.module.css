@@ -1,0 +1,26 @@
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 9999px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.pending {
+  background: #fff7ed;
+  color: #d97706;
+}
+
+.transit {
+  background: #eef6ff;
+  color: #0078d4;
+}
+
+.received {
+  background: #edf7ed;
+  color: #107c10;
+}

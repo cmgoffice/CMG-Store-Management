@@ -1,0 +1,93 @@
+.card {
+  position: relative;
+  display: flex;
+  min-height: 104px;
+  align-items: center;
+  gap: 18px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 10px;
+  background: var(--color-panel);
+  box-shadow: var(--shadow-card);
+  padding: 18px 22px;
+}
+
+.card::after {
+  position: absolute;
+  inset: auto 22px -22px 22px;
+  height: 34px;
+  border-radius: 999px;
+  filter: blur(20px);
+  opacity: 0.35;
+  content: '';
+}
+
+.card p {
+  margin: 0;
+  color: rgb(255 255 255 / 70%);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+  text-transform: uppercase;
+}
+
+.card strong {
+  display: block;
+  color: #fff;
+  font-size: 30px;
+  font-weight: 500;
+  line-height: 36px;
+}
+
+.card span {
+  display: block;
+  color: rgb(255 255 255 / 72%);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 14px;
+  text-transform: uppercase;
+}
+
+.sparkline {
+  width: 64px;
+  height: 48px;
+  flex: 0 0 auto;
+  border-radius: 14px;
+  background:
+    linear-gradient(135deg, rgb(255 255 255 / 38), transparent 40%),
+    repeating-linear-gradient(90deg, rgb(255 255 255 / 26) 0 2px, transparent 2px 8px);
+  opacity: 0.75;
+}
+
+.pink {
+  background: linear-gradient(135deg, #ff7a9d, #f3527d);
+}
+
+.purple {
+  background: linear-gradient(135deg, #d688ff, #8b4df4);
+}
+
+.green {
+  background: linear-gradient(135deg, #79e6c1, #35bd7f);
+}
+
+.yellow {
+  background: linear-gradient(135deg, #f8e95a, #e8c92c);
+}
+
+.blue {
+  background: linear-gradient(135deg, #7cc7ff, #5b65f5);
+}
+
+.neutral {
+  background: linear-gradient(135deg, #9aa7ff, #6f48f5);
+}
+
+.pink::after,
+.purple::after,
+.green::after,
+.yellow::after,
+.blue::after,
+.neutral::after {
+  background: currentColor;
+}

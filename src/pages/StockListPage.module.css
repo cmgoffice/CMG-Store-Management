@@ -1,0 +1,54 @@
+.select,
+.primaryButton {
+  min-height: 40px;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.select {
+  border: 1px solid var(--color-outline-variant);
+  background: var(--color-panel);
+  color: var(--color-text);
+  padding: 0 12px;
+}
+
+.primaryButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: var(--color-primary-container);
+  color: #fff;
+  font-weight: 600;
+  padding: 0 14px;
+}
+
+.availabilityBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  border-radius: 9999px;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 12px;
+  white-space: nowrap;
+}
+
+.available {
+  background: #edf7ed;
+  color: #107c10;
+}
+
+.unavailable {
+  background: #fdeaea;
+  color: #c50f1f;
+}
+
+@media (max-width: 720px) {
+  .select,
+  .primaryButton {
+    width: 100%;
+    justify-content: center;
+  }
+}
