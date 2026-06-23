@@ -11,38 +11,54 @@ import {
   collection,
   doc,
   getDocs,
+  type DocumentData,
   setDoc,
   writeBatch,
   onSnapshot,
 } from 'firebase/firestore';
-import { db } from '../firebase';
+import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
+import { db, masterDataDb, masterDataProjectsPath, storage } from '../firebase';
 import {
   dispatchRecords as mockDispatchRecords,
   projects as mockProjects,
+  receivingRequests as mockReceivingRequests,
   stockItems as mockStockItems,
 } from '../data/mockData';
 import type {
   DispatchRecord,
   Project,
+  ProjectStatus,
+  ReceivingRequest,
+  ReceivingRequestItem,
+  ReceivingRequestStatus,
   StockItem,
 } from '../types/models';
 import { useAuth } from './AuthContext';
 
+interface CreateDispatchLineInput {
+  receiveNo: string;
+  qty: number;
+}
+
 interface CreateDispatchInput {
-  receiveNos: string[];
+  sourceProjectNo: string;
+  items: CreateDispatchLineInput[];
   projectNo: string;
   transport: string;
   note: string;
-  photoUrls: string[];
+  photos: File[];
 }
 
 interface InventoryContextValue {
   projects: Project[];
+  activeProjects: Project[];
   stockItems: StockItem[];
+  receivingRequests: ReceivingRequest[];
   dispatchRecords: DispatchRecord[];
-  dispatchItems: (receiveNos: string[], projectNo: string) => Promise<void>;
+  updateProjectStatus: (projectNo: string, status: ProjectStatus) => Promise<void>;
   createDispatch: (input: CreateDispatchInput) => Promise<void>;
   approveReceipt: (receiveNo: string) => Promise<void>;
+  approveReceivingRequest: (requestId: string) => Promise<void>;
   receiveDispatch: (dispatchId: string) => Promise<void>;
   receiveNewItem: (item: StockItem) => Promise<void>;
   activeProjectNo: string;
@@ -52,6 +68,40 @@ interface InventoryContextValue {
 const InventoryContext = createContext<InventoryContextValue | undefined>(undefined);
 
 const APP_NAME = 'CMG-Store-Management';
+const MASTER_LOCKED_FIELDS: NonNullable<Project['lockedFields']> = [
+  'projectNo',
+  'projectName',
+  'location',
+  'projectManager',
+  'constructionManager',
+];
+
+interface MasterDataProject {
+  id?: string;
+  jobNo?: string;
+  name?: string;
+  location?: string;
+  pmName?: string;
+  cmName?: string;
+}
+
+function normalizeProjectStatus(value: unknown): ProjectStatus {
+  return String(value).trim().toLowerCase() === 'disactive' ? 'Disactive' : 'Active';
+}
+
+function normalizeReceivingRequestStatus(value: unknown): ReceivingRequestStatus {
+  const normalized = String(value || 'pending').trim().toLowerCase();
+
+  if (
+    normalized === 'approved' ||
+    normalized === 'rejected' ||
+    normalized === 'cancelled'
+  ) {
+    return normalized;
+  }
+
+  return 'pending';
+}
 
 function formatPersonName(firstName?: string, lastName?: string, fallback = 'Unknown User') {
   const fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
@@ -69,29 +119,297 @@ function createDispatchNumber() {
   return `DSP-${yyyy}${mm}${dd}-${hh}${min}${ss}`;
 }
 
+function createProjectLabel(projectNo: string) {
+  return `Project ${projectNo}`;
+}
+
+function createProjectStoreLocation(projectNo: string) {
+  return `Store ${projectNo}`;
+}
+
+function createTransitLocation(projectNo: string) {
+  return `In Transit to ${createProjectStoreLocation(projectNo)}`;
+}
+
+function roundAmount(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+function calculatePartialAmount(totalAmount: number, totalQty: number, selectedQty: number) {
+  if (totalQty <= 0 || selectedQty <= 0) {
+    return 0;
+  }
+
+  return roundAmount((totalAmount * selectedQty) / totalQty);
+}
+
+function createDispatchStockReceiveNo(receiveNo: string, dispatchNo: string, index: number) {
+  return `${receiveNo}-${dispatchNo}-${String(index + 1).padStart(2, '0')}`;
+}
+
+function createReceivingStockReceiveNo(request: ReceivingRequest, item: ReceivingRequestItem, index: number) {
+  if (item.stockReceiveNo) {
+    return item.stockReceiveNo;
+  }
+
+  if (request.items.length === 1) {
+    return request.receiveNo;
+  }
+
+  return `${request.receiveNo}-${String(index + 1).padStart(2, '0')}`;
+}
+
+function extractProjectNo(projectLabel: string) {
+  return projectLabel.replace(/^Project\s+/i, '').trim();
+}
+
+function sanitizeFileName(name: string) {
+  return name.replace(/[^a-zA-Z0-9._-]+/g, '-');
+}
+
+function normalizeText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function normalizeDateText(value: unknown) {
+  if (typeof value === 'string') {
+    return value.trim();
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+
+  if (
+    value &&
+    typeof value === 'object' &&
+    'toDate' in value &&
+    typeof (value as { toDate: () => Date }).toDate === 'function'
+  ) {
+    return (value as { toDate: () => Date }).toDate().toISOString();
+  }
+
+  return '';
+}
+
+function normalizeNumber(value: unknown, fallback = 0) {
+  const parsed = typeof value === 'number' ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeStringArray(value: unknown) {
+  return Array.isArray(value)
+    ? value.map((item) => normalizeText(item)).filter(Boolean)
+    : [];
+}
+
+function normalizeBoolean(value: unknown) {
+  return value === true || String(value).trim().toLowerCase() === 'true';
+}
+
+function normalizeProjectNoFromRequest(data: DocumentData) {
+  const directProjectNo = normalizeText(data.projectNo);
+  if (directProjectNo) {
+    return directProjectNo.replace(/^J-(\d+)/i, (_match, digits: string) => `J${digits}`);
+  }
+
+  const projectItemCode = normalizeText(data.projectItemCode);
+  if (projectItemCode) {
+    return projectItemCode;
+  }
+
+  const projectId = normalizeText(data.projectId);
+  const projectMatch = projectId.match(/^J-(\d+)/i);
+  if (projectMatch) {
+    return `J${projectMatch[1]}`;
+  }
+
+  return projectId;
+}
+
+function parseReceivingItems(value: unknown) {
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  return [];
+}
+
+function normalizeReceivingRequestItem(data: DocumentData, index: number): ReceivingRequestItem {
+  const receivedQty = normalizeNumber(data.receivedQty ?? data.qty ?? data.QTY ?? data.quantity);
+  const orderedQty = normalizeNumber(data.orderedQty, receivedQty);
+  const price = normalizeNumber(data.price);
+  const amount = normalizeNumber(data.amount, price > 0 ? price * receivedQty : 0);
+
+  return {
+    itemNo: normalizeText(data.itemNo ?? data.materialNo) || `ITEM-${String(index + 1).padStart(2, '0')}`,
+    itemDescription: normalizeText(data.itemDescription ?? data.description),
+    orderedQty,
+    receivedQty,
+    unit: normalizeText(data.unit),
+    price,
+    amount,
+    materialNo: normalizeText(data.materialNo),
+    photos: normalizeStringArray(data.photos),
+    stockReceiveNo: normalizeText(data.stockReceiveNo),
+  };
+}
+
+function normalizeReceivingRequest(data: DocumentData, fallbackId: string): ReceivingRequest {
+  const items = parseReceivingItems(data.items)
+    .map((item, index) => normalizeReceivingRequestItem(item as DocumentData, index))
+    .filter((item) => item.receivedQty > 0);
+  const projectNo = normalizeProjectNoFromRequest(data);
+  const totalQty = normalizeNumber(data.totalQty, items.reduce((sum, item) => sum + item.receivedQty, 0));
+  const totalAmount = normalizeNumber(data.totalAmount, items.reduce((sum, item) => sum + item.amount, 0));
+
+  return {
+    id: normalizeText(data.id) || fallbackId,
+    documentNo: normalizeText(data.documentNo),
+    receiveNo: normalizeText(data.receiveNo ?? data.rpNo) || fallbackId,
+    poNo: normalizeText(data.poNo ?? data.documentNo),
+    prNo: normalizeText(data.prNo),
+    poType: normalizeText(data.poType),
+    poId: normalizeText(data.poId),
+    projectId: normalizeText(data.projectId),
+    projectNo,
+    projectName: normalizeText(data.projectName) || normalizeText(data.projectId),
+    projectItemCode: normalizeText(data.projectItemCode),
+    location: normalizeText(data.location),
+    vendorName: normalizeText(data.vendorName),
+    receiveName: normalizeText(data.receiveName),
+    receiveDate: normalizeDateText(data.receiveDate ?? data.receivedDate),
+    receivedByUid: normalizeText(data.receivedByUid),
+    receivedByName: normalizeText(data.receivedByName),
+    note: normalizeText(data.note),
+    sourceApp: normalizeText(data.sourceApp) || (normalizeBoolean(data.autoCreatedFromPoApproval) ? 'PO Approval' : ''),
+    externalDocId: normalizeText(data.externalDocId ?? data.poId ?? data.documentNo),
+    autoCreatedFromPoApproval: normalizeBoolean(data.autoCreatedFromPoApproval),
+    requestStatus: normalizeReceivingRequestStatus(data.requestStatus ?? data.status),
+    items,
+    totalQty,
+    totalAmount,
+    requestedAt: normalizeDateText(data.requestedAt) || normalizeDateText(data.createdAt) || new Date().toISOString(),
+    approvedAt: normalizeDateText(data.approvedAt),
+    approvedByUid: normalizeText(data.approvedByUid),
+    approvedByName: normalizeText(data.approvedByName),
+    approvedByEmail: normalizeText(data.approvedByEmail),
+    stockReceiveNos: normalizeStringArray(data.stockReceiveNos),
+  };
+}
+
+function normalizeLocalProject(data: Partial<Project>, fallbackId: string): Project | null {
+  const projectNo = normalizeText(data.projectNo) || normalizeText((data as { jobNo?: string }).jobNo) || fallbackId;
+  if (!projectNo) {
+    return null;
+  }
+
+  return {
+    projectId: normalizeText(data.projectId) || normalizeText((data as { id?: string }).id) || projectNo,
+    projectNo,
+    projectName: normalizeText(data.projectName) || normalizeText((data as { name?: string }).name),
+    location: normalizeText(data.location),
+    projectManager: normalizeText(data.projectManager),
+    constructionManager: normalizeText(data.constructionManager),
+    status: normalizeProjectStatus(data.status),
+    source: 'local',
+  };
+}
+
+function normalizeMasterProject(data: MasterDataProject, fallbackId: string): Project | null {
+  const projectNo = normalizeText(data.jobNo) || fallbackId;
+  if (!projectNo) {
+    return null;
+  }
+
+  return {
+    projectId: normalizeText(data.id) || projectNo,
+    projectNo,
+    projectName: normalizeText(data.name),
+    location: normalizeText(data.location),
+    projectManager: normalizeText(data.pmName),
+    constructionManager: normalizeText(data.cmName),
+    status: 'Active',
+    source: 'master',
+    lockedFields: MASTER_LOCKED_FIELDS,
+  };
+}
+
+function mergeProjects(
+  localProjects: Project[],
+  masterProjects: Project[],
+  projectStatuses: Record<string, ProjectStatus>
+) {
+  const merged = new Map<string, Project>();
+
+  localProjects.forEach((project) => {
+    merged.set(project.projectNo, {
+      ...project,
+      status: projectStatuses[project.projectNo] ?? project.status ?? 'Active',
+      source: 'local',
+    });
+  });
+
+  masterProjects.forEach((project) => {
+    if (merged.has(project.projectNo)) {
+      return;
+    }
+
+    merged.set(project.projectNo, {
+      ...project,
+      status: projectStatuses[project.projectNo] ?? project.status ?? 'Active',
+      source: 'master',
+      lockedFields: MASTER_LOCKED_FIELDS,
+    });
+  });
+
+  return Array.from(merged.values()).sort((a, b) => a.projectNo.localeCompare(b.projectNo));
+}
+
 export function InventoryProvider({ children }: PropsWithChildren) {
   const { userProfile } = useAuth();
   const [items, setItems] = useState<StockItem[]>([]);
-  const [projectList, setProjectList] = useState<Project[]>([]);
+  const [receivingRequestList, setReceivingRequestList] = useState<ReceivingRequest[]>([]);
+  const [localProjects, setLocalProjects] = useState<Project[]>([]);
+  const [masterProjects, setMasterProjects] = useState<Project[]>([]);
+  const [projectStatuses, setProjectStatuses] = useState<Record<string, ProjectStatus>>({});
   const [dispatchList, setDispatchList] = useState<DispatchRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeProjectNo, setActiveProjectNo] = useState<string>('');
+  const projectList = useMemo(
+    () => mergeProjects(localProjects, masterProjects, projectStatuses),
+    [localProjects, masterProjects, projectStatuses]
+  );
 
   useEffect(() => {
     let unsubProjects = () => {};
+    let unsubMasterProjects = () => {};
+    let unsubProjectStatuses = () => {};
     let unsubStock = () => {};
     let unsubDispatch = () => {};
+    let unsubReceivingRequests = () => {};
 
     async function initializeDatabase() {
       try {
         const projectsCol = collection(db, APP_NAME, 'root', 'projects');
         const stockCol = collection(db, APP_NAME, 'root', 'stockItems');
         const dispatchCol = collection(db, APP_NAME, 'root', 'dispatchRecords');
+        const receivingRequestsCol = collection(db, APP_NAME, 'root', 'receivingRequests');
 
-        const [projectsSnapshot, stockSnapshot, dispatchSnapshot] = await Promise.all([
+        const [projectsSnapshot, stockSnapshot, dispatchSnapshot, receivingRequestsSnapshot] = await Promise.all([
           getDocs(projectsCol),
           getDocs(stockCol),
           getDocs(dispatchCol),
+          getDocs(receivingRequestsCol),
         ]);
 
         if (projectsSnapshot.empty && stockSnapshot.empty) {
@@ -118,6 +436,15 @@ export function InventoryProvider({ children }: PropsWithChildren) {
           });
           await batch.commit();
         }
+
+        if (receivingRequestsSnapshot.empty) {
+          const batch = writeBatch(db);
+          mockReceivingRequests.forEach((request) => {
+            const docRef = doc(db, APP_NAME, 'root', 'receivingRequests', request.id);
+            batch.set(docRef, request);
+          });
+          await batch.commit();
+        }
       } catch (error) {
         console.error('Failed to query or seed Firestore databases on init:', error);
       }
@@ -126,13 +453,60 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       unsubProjects = onSnapshot(
         projectsColRef,
         (snapshot) => {
-          const loadedProjects = snapshot.docs.map((d) => d.data() as Project);
+          const loadedProjects = snapshot.docs
+            .map((projectDoc) => normalizeLocalProject(projectDoc.data() as Partial<Project>, projectDoc.id))
+            .filter((project): project is Project => project !== null);
           loadedProjects.sort((a, b) => a.projectNo.localeCompare(b.projectNo));
-          setProjectList(loadedProjects);
+          setLocalProjects(loadedProjects);
         },
         (error) => {
           console.error('Failed to listen to projects updates:', error);
-          setProjectList(mockProjects);
+          setLocalProjects(mockProjects.map((project) => ({ ...project, source: 'local' })));
+        }
+      );
+
+      if (masterDataDb && masterDataProjectsPath) {
+        const sanitizedPath = masterDataProjectsPath.replace(/^\/+|\/+$/g, '');
+        const pathSegments = sanitizedPath.split('/').filter(Boolean);
+
+        if (pathSegments.length % 2 === 1) {
+          const masterProjectsColRef = collection(masterDataDb, sanitizedPath);
+          unsubMasterProjects = onSnapshot(
+            masterProjectsColRef,
+            (snapshot) => {
+              const loadedProjects = snapshot.docs
+                .map((projectDoc) => normalizeMasterProject(projectDoc.data() as MasterDataProject, projectDoc.id))
+                .filter((project): project is Project => project !== null);
+              loadedProjects.sort((a, b) => a.projectNo.localeCompare(b.projectNo));
+              setMasterProjects(loadedProjects);
+            },
+            (error) => {
+              console.error('Failed to listen to MasterData project updates:', error);
+              setMasterProjects([]);
+            }
+          );
+        } else {
+          console.error('Invalid MasterData projects path. Expected a Firestore collection path:', masterDataProjectsPath);
+          setMasterProjects([]);
+        }
+      } else {
+        setMasterProjects([]);
+      }
+
+      const projectStatusesColRef = collection(db, APP_NAME, 'root', 'projectStatuses');
+      unsubProjectStatuses = onSnapshot(
+        projectStatusesColRef,
+        (snapshot) => {
+          const loadedStatuses = snapshot.docs.reduce<Record<string, ProjectStatus>>((acc, statusDoc) => {
+            const data = statusDoc.data() as DocumentData;
+            acc[statusDoc.id] = normalizeProjectStatus(data.status);
+            return acc;
+          }, {} as Record<string, ProjectStatus>);
+          setProjectStatuses(loadedStatuses);
+        },
+        (error) => {
+          console.error('Failed to listen to project status updates:', error);
+          setProjectStatuses({});
         }
       );
 
@@ -165,14 +539,31 @@ export function InventoryProvider({ children }: PropsWithChildren) {
           setDispatchList(mockDispatchRecords);
         }
       );
+
+      const receivingRequestsColRef = collection(db, APP_NAME, 'root', 'receivingRequests');
+      unsubReceivingRequests = onSnapshot(
+        receivingRequestsColRef,
+        (snapshot) => {
+          const loadedRequests = snapshot.docs.map((d) => normalizeReceivingRequest(d.data(), d.id));
+          loadedRequests.sort((a, b) => b.requestedAt.localeCompare(a.requestedAt));
+          setReceivingRequestList(loadedRequests);
+        },
+        (error) => {
+          console.error('Failed to listen to receiving request updates:', error);
+          setReceivingRequestList(mockReceivingRequests);
+        }
+      );
     }
 
     initializeDatabase();
 
     return () => {
       unsubProjects();
+      unsubMasterProjects();
+      unsubProjectStatuses();
       unsubStock();
       unsubDispatch();
+      unsubReceivingRequests();
     };
   }, []);
 
@@ -194,6 +585,11 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     return projectList.filter((proj) => assigned.includes(proj.projectNo));
   }, [projectList, userProfile]);
 
+  const activeVisibleProjects = useMemo(
+    () => visibleProjects.filter((project) => normalizeProjectStatus(project.status) === 'Active'),
+    [visibleProjects]
+  );
+
   const visibleDispatchRecords = useMemo(() => {
     if (!userProfile) {
       return [];
@@ -209,35 +605,65 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     }
 
     const assigned = new Set(userProfile.assignedProjects || []);
-    return dispatchList.filter((record) => assigned.has(record.destinationProjectNo));
+    return dispatchList.filter(
+      (record) =>
+        assigned.has(record.sourceProjectNo) ||
+        assigned.has(record.destinationProjectNo)
+    );
   }, [dispatchList, userProfile]);
 
   useEffect(() => {
-    if (visibleProjects.length > 0) {
-      const isValid = visibleProjects.some((p) => p.projectNo === activeProjectNo);
+    if (activeVisibleProjects.length > 0) {
+      const isValid = activeVisibleProjects.some((p) => p.projectNo === activeProjectNo);
       if (!activeProjectNo || !isValid) {
-        setActiveProjectNo(visibleProjects[0].projectNo);
+        setActiveProjectNo(activeVisibleProjects[0].projectNo);
       }
     } else {
       setActiveProjectNo('');
     }
-  }, [visibleProjects, activeProjectNo]);
+  }, [activeVisibleProjects, activeProjectNo]);
 
   const createDispatch = useCallback(async ({
-    receiveNos,
+    sourceProjectNo,
+    items: selectedLines,
     projectNo,
     transport,
     note,
-    photoUrls,
+    photos,
   }: CreateDispatchInput) => {
-    if (!receiveNos.length) {
+    const normalizedLines = selectedLines
+      .map((line) => ({
+        receiveNo: line.receiveNo,
+        qty: Number(line.qty),
+      }))
+      .filter((line) => line.receiveNo && Number.isFinite(line.qty) && line.qty > 0);
+
+    if (!normalizedLines.length || !sourceProjectNo || !projectNo || sourceProjectNo === projectNo) {
       return;
     }
 
-    const selectedItems = items.filter((item) => receiveNos.includes(item.receiveNo));
+    const sourceProject = projectList.find((project) => project.projectNo === sourceProjectNo);
     const targetProject = projectList.find((project) => project.projectNo === projectNo);
+    const selectedItems = normalizedLines.map((line) => {
+      const sourceItem = items.find((item) => item.receiveNo === line.receiveNo);
 
-    if (!selectedItems.length || !targetProject) {
+      if (
+        !sourceItem ||
+        sourceItem.location !== 'Store Center' ||
+        sourceItem.status !== 'Pending Dispatch' ||
+        sourceItem.purchasedForProject !== createProjectLabel(sourceProjectNo) ||
+        line.qty > sourceItem.qty
+      ) {
+        throw new Error(`Invalid dispatch selection for ${line.receiveNo}`);
+      }
+
+      return {
+        line,
+        sourceItem,
+      };
+    });
+
+    if (!selectedItems.length || !sourceProject || !targetProject) {
       return;
     }
 
@@ -250,25 +676,43 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       userProfile?.email ?? 'Store Center'
     );
     const dispatchedByEmail = userProfile?.email ?? 'unknown@cmg.local';
+    const photoUrls = await Promise.all(
+      photos.map(async (photo, index) => {
+        const storageRef = ref(
+          storage,
+          `dispatchRecords/${dispatchNo}/${String(index + 1).padStart(2, '0')}-${sanitizeFileName(photo.name)}`
+        );
+        await uploadBytes(storageRef, photo);
+        return getDownloadURL(storageRef);
+      })
+    );
+
+    const dispatchSnapshots = selectedItems.map(({ line, sourceItem }, index) => ({
+      receiveNo: sourceItem.receiveNo,
+      stockReceiveNo:
+        line.qty === sourceItem.qty
+          ? sourceItem.receiveNo
+          : createDispatchStockReceiveNo(sourceItem.receiveNo, dispatchNo, index),
+      prNo: sourceItem.prNo,
+      poNo: sourceItem.poNo,
+      itemNo: sourceItem.itemNo,
+      itemDescription: sourceItem.itemDescription,
+      qty: line.qty,
+      vendorName: sourceItem.vendorName,
+      sourceLocation: sourceItem.location,
+    }));
 
     const record: DispatchRecord = {
       id: dispatchId,
       dispatchNo,
+      sourceProjectNo: sourceProject.projectNo,
+      sourceProjectName: sourceProject.projectName,
       destinationProjectNo: targetProject.projectNo,
       destinationProjectName: targetProject.projectName,
       status: 'Pending Receipt',
-      itemReceiveNos: selectedItems.map((item) => item.receiveNo),
-      items: selectedItems.map((item) => ({
-        receiveNo: item.receiveNo,
-        prNo: item.prNo,
-        poNo: item.poNo,
-        itemNo: item.itemNo,
-        itemDescription: item.itemDescription,
-        qty: item.qty,
-        vendorName: item.vendorName,
-        sourceLocation: item.location,
-      })),
-      totalQty: selectedItems.reduce((sum, item) => sum + item.qty, 0),
+      itemReceiveNos: dispatchSnapshots.map((item) => item.stockReceiveNo),
+      items: dispatchSnapshots,
+      totalQty: dispatchSnapshots.reduce((sum, item) => sum + item.qty, 0),
       transport: transport.trim(),
       note: note.trim(),
       photoUrls,
@@ -278,29 +722,48 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     };
 
     const batch = writeBatch(db);
-    selectedItems.forEach((item) => {
-      const docRef = doc(db, APP_NAME, 'root', 'stockItems', item.receiveNo);
-      batch.update(docRef, {
-        status: 'In Transit',
-        location: `In Transit to Project ${projectNo}`,
-        purchasedForProject: `Project ${projectNo}`,
+    selectedItems.forEach(({ line, sourceItem }, index) => {
+      const sourceRef = doc(db, APP_NAME, 'root', 'stockItems', sourceItem.receiveNo);
+      const dispatchedAmount = calculatePartialAmount(sourceItem.amount, sourceItem.qty, line.qty);
+      const remainingQty = sourceItem.qty - line.qty;
+      const remainingAmount = roundAmount(sourceItem.amount - dispatchedAmount);
+
+      if (remainingQty <= 0) {
+        batch.update(sourceRef, {
+          status: 'In Transit',
+          location: createTransitLocation(projectNo),
+          purchasedForProject: createProjectLabel(projectNo),
+        });
+        return;
+      }
+
+      batch.update(sourceRef, {
+        qty: remainingQty,
+        amount: remainingAmount,
+        status: 'Pending Dispatch',
+        location: 'Store Center',
+        purchasedForProject: createProjectLabel(sourceProjectNo),
       });
+
+      const dispatchedItemId = dispatchSnapshots[index].stockReceiveNo;
+      const dispatchedItemRef = doc(db, APP_NAME, 'root', 'stockItems', dispatchedItemId);
+      const dispatchedItem: StockItem = {
+        ...sourceItem,
+        receiveNo: dispatchedItemId,
+        qty: line.qty,
+        amount: dispatchedAmount,
+        location: createTransitLocation(projectNo),
+        purchasedForProject: createProjectLabel(projectNo),
+        status: 'In Transit',
+      };
+
+      batch.set(dispatchedItemRef, dispatchedItem);
     });
 
     const dispatchRef = doc(db, APP_NAME, 'root', 'dispatchRecords', dispatchId);
     batch.set(dispatchRef, record);
     await batch.commit();
   }, [items, projectList, userProfile]);
-
-  const dispatchItems = useCallback(async (receiveNos: string[], projectNo: string) => {
-    await createDispatch({
-      receiveNos,
-      projectNo,
-      transport: '',
-      note: '',
-      photoUrls: [],
-    });
-  }, [createDispatch]);
 
   const receiveDispatch = useCallback(async (dispatchId: string) => {
     const target = dispatchList.find((record) => record.id === dispatchId);
@@ -321,8 +784,8 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       const docRef = doc(db, APP_NAME, 'root', 'stockItems', receiveNo);
       batch.update(docRef, {
         status: 'Received at Site',
-        location: `Project ${target.destinationProjectNo}`,
-        purchasedForProject: `Project ${target.destinationProjectNo}`,
+        location: createProjectStoreLocation(target.destinationProjectNo),
+        purchasedForProject: createProjectLabel(target.destinationProjectNo),
       });
     });
 
@@ -335,6 +798,68 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     });
     await batch.commit();
   }, [dispatchList, userProfile]);
+
+  const approveReceivingRequest = useCallback(async (requestId: string) => {
+    const target = receivingRequestList.find(
+      (request) => request.id === requestId && request.requestStatus === 'pending'
+    );
+
+    if (!target || !target.items.length) {
+      return;
+    }
+
+    const projectNo = target.projectNo || extractProjectNo(target.projectName);
+    const location = target.location || (projectNo ? createProjectStoreLocation(projectNo) : 'Store Center');
+    const stockStatus: StockItem['status'] = location === 'Store Center' ? 'Pending Dispatch' : 'Received at Site';
+    const approvedAt = new Date().toISOString();
+    const approvedByName = formatPersonName(
+      userProfile?.firstName,
+      userProfile?.lastName,
+      userProfile?.email ?? 'Store Receiver'
+    );
+    const approvedByEmail = userProfile?.email ?? 'unknown@cmg.local';
+    const stockReceiveNos = target.items.map((item, index) => createReceivingStockReceiveNo(target, item, index));
+
+    const batch = writeBatch(db);
+    target.items.forEach((item, index) => {
+      const stockReceiveNo = stockReceiveNos[index];
+      const stockRef = doc(db, APP_NAME, 'root', 'stockItems', stockReceiveNo);
+      const stockItem: StockItem = {
+        receiveNo: stockReceiveNo,
+        poNo: target.poNo,
+        prNo: target.prNo,
+        poType: target.poType,
+        itemNo: item.itemNo,
+        itemDescription: item.itemDescription,
+        amount: item.amount,
+        qty: item.receivedQty,
+        vendorName: target.vendorName,
+        location,
+        purchasedForProject: projectNo ? createProjectLabel(projectNo) : target.projectName,
+        receiveName: target.receiveName || approvedByName,
+        receiveDate: target.receiveDate,
+        status: stockStatus,
+      };
+
+      batch.set(stockRef, stockItem);
+    });
+
+    const requestRef = doc(db, APP_NAME, 'root', 'receivingRequests', target.id);
+    batch.set(
+      requestRef,
+      {
+        requestStatus: 'approved',
+        approvedAt,
+        approvedByUid: userProfile?.uid ?? '',
+        approvedByName,
+        approvedByEmail,
+        stockReceiveNos,
+      },
+      { merge: true }
+    );
+
+    await batch.commit();
+  }, [receivingRequestList, userProfile]);
 
   const approveReceipt = useCallback(async (receiveNo: string) => {
     const pendingDispatch = dispatchList.find(
@@ -350,11 +875,13 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     const target = items.find((item) => item.receiveNo === receiveNo);
     if (!target) return;
 
+    const projectNo = extractProjectNo(target.purchasedForProject);
+
     await setDoc(
       docRef,
       {
         status: 'Received at Site',
-        location: target.purchasedForProject,
+        location: projectNo ? createProjectStoreLocation(projectNo) : target.location,
       },
       { merge: true }
     );
@@ -365,14 +892,36 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     await setDoc(docRef, item);
   }, []);
 
+  const updateProjectStatus = useCallback(async (projectNo: string, status: ProjectStatus) => {
+    const normalizedProjectNo = projectNo.trim();
+    if (!normalizedProjectNo) {
+      return;
+    }
+    const normalizedStatus = normalizeProjectStatus(status);
+
+    const docRef = doc(db, APP_NAME, 'root', 'projectStatuses', normalizedProjectNo);
+    await setDoc(
+      docRef,
+      {
+        projectNo: normalizedProjectNo,
+        status: normalizedStatus,
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    );
+  }, []);
+
   const value = useMemo<InventoryContextValue>(
     () => ({
       projects: visibleProjects,
+      activeProjects: activeVisibleProjects,
       stockItems: items,
+      receivingRequests: receivingRequestList,
       dispatchRecords: visibleDispatchRecords,
-      dispatchItems,
+      updateProjectStatus,
       createDispatch,
       approveReceipt,
+      approveReceivingRequest,
       receiveDispatch,
       receiveNewItem,
       activeProjectNo,
@@ -380,12 +929,15 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     }),
     [
       activeProjectNo,
+      approveReceivingRequest,
       approveReceipt,
       createDispatch,
-      dispatchItems,
       items,
+      receivingRequestList,
       receiveDispatch,
       receiveNewItem,
+      updateProjectStatus,
+      activeVisibleProjects,
       visibleDispatchRecords,
       visibleProjects,
     ]

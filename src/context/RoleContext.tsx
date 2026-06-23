@@ -83,10 +83,7 @@ export function RoleProvider({ children }: PropsWithChildren) {
 
       const canDispatch = isAdmin || activeRole === 'Store Center';
       
-      const canApproveReceipt =
-        isAdmin ||
-        activeRole === 'Admin Site' ||
-        activeRole === 'Store Site';
+      const canApproveReceipt = true;
         
       const canReceiveStock = isAdmin || activeRole === 'Store Center';
       

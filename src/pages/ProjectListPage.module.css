@@ -2,3 +2,69 @@
   color: var(--color-primary);
   font-weight: 700;
 }
+
+.statusCell {
+  display: grid;
+  gap: 4px;
+  min-width: 150px;
+}
+
+.statusInput {
+  width: 100%;
+  border: 1px solid #d7d1e5;
+  border-radius: 10px;
+  background: #fff;
+  color: var(--color-text);
+  font: inherit;
+  min-height: 36px;
+  padding: 4px 10px;
+}
+
+.statusInput:disabled {
+  background: #f4f1fa;
+  color: var(--color-text-muted);
+  cursor: not-allowed;
+}
+
+.statusInput:focus {
+  outline: 2px solid rgb(79 46 217 / 18%);
+  border-color: var(--color-primary);
+}
+
+.statusActive {
+  border-color: #9dd7b8;
+  background: #ecfbf3;
+  color: #0f7b4b;
+}
+
+.statusDisactive {
+  border-color: #f0c2cb;
+  background: #fff1f4;
+  color: #b42342;
+}
+
+.statusMeta {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.sourceBadge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+
+.masterBadge {
+  background: #efe9ff;
+  color: #5b33d6;
+}
+
+.localBadge {
+  background: #e7f6ee;
+  color: #0f7b4b;
+}

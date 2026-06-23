@@ -1,11 +1,17 @@
 import { Timestamp } from 'firebase/firestore';
 
+export type ProjectStatus = 'Active' | 'Disactive';
+
 export interface Project {
+  projectId?: string;
   projectNo: string;
   projectName: string;
   location: string;
   projectManager: string;
   constructionManager: string;
+  status?: ProjectStatus;
+  source?: 'local' | 'master';
+  lockedFields?: Array<'projectNo' | 'projectName' | 'location' | 'projectManager' | 'constructionManager'>;
 }
 
 export type StockStatus =
@@ -16,6 +22,12 @@ export type StockStatus =
 export type DispatchRecordStatus =
   | 'Pending Receipt'
   | 'Received at Site';
+
+export type ReceivingRequestStatus =
+  | 'pending'
+  | 'approved'
+  | 'rejected'
+  | 'cancelled';
 
 export interface StockItem {
   receiveNo: string;
@@ -34,8 +46,56 @@ export interface StockItem {
   status: StockStatus;
 }
 
+export interface ReceivingRequestItem {
+  itemNo: string;
+  itemDescription: string;
+  orderedQty?: number;
+  receivedQty: number;
+  unit?: string;
+  price?: number;
+  amount: number;
+  materialNo?: string;
+  photos?: string[];
+  stockReceiveNo?: string;
+}
+
+export interface ReceivingRequest {
+  id: string;
+  documentNo?: string;
+  receiveNo: string;
+  poNo: string;
+  prNo: string;
+  poType: string;
+  poId?: string;
+  projectId?: string;
+  projectNo: string;
+  projectName: string;
+  projectItemCode?: string;
+  location: string;
+  vendorName: string;
+  receiveName: string;
+  receiveDate: string;
+  receivedByUid?: string;
+  receivedByName?: string;
+  note?: string;
+  sourceApp?: string;
+  externalDocId?: string;
+  autoCreatedFromPoApproval?: boolean;
+  requestStatus: ReceivingRequestStatus;
+  items: ReceivingRequestItem[];
+  totalQty: number;
+  totalAmount: number;
+  requestedAt: string;
+  approvedAt?: string;
+  approvedByUid?: string;
+  approvedByName?: string;
+  approvedByEmail?: string;
+  stockReceiveNos?: string[];
+}
+
 export interface DispatchItemSnapshot {
   receiveNo: string;
+  stockReceiveNo: string;
   prNo: string;
   poNo: string;
   itemNo: string;
@@ -48,6 +108,8 @@ export interface DispatchItemSnapshot {
 export interface DispatchRecord {
   id: string;
   dispatchNo: string;
+  sourceProjectNo: string;
+  sourceProjectName: string;
   destinationProjectNo: string;
   destinationProjectName: string;
   status: DispatchRecordStatus;

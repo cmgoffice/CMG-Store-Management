@@ -1,4 +1,4 @@
-import type { DispatchRecord, Project, StockItem } from '../types/models';
+import type { DispatchRecord, Project, ReceivingRequest, StockItem } from '../types/models';
 
 export const projects: Project[] = [
   {
@@ -134,6 +134,8 @@ export const dispatchRecords: DispatchRecord[] = [
   {
     id: 'DSP-20260621-001',
     dispatchNo: 'DSP-20260621-001',
+    sourceProjectNo: 'J74',
+    sourceProjectName: 'CMG Rama II Warehouse',
     destinationProjectNo: 'J74',
     destinationProjectName: 'CMG Rama II Warehouse',
     status: 'Pending Receipt',
@@ -141,6 +143,7 @@ export const dispatchRecords: DispatchRecord[] = [
     items: [
       {
         receiveNo: 'RCV-2026-003',
+        stockReceiveNo: 'RCV-2026-003',
         prNo: 'PR-2605-141',
         poNo: 'PO-2606-0062',
         itemNo: 'SAFE-HELMET-W',
@@ -161,6 +164,8 @@ export const dispatchRecords: DispatchRecord[] = [
   {
     id: 'DSP-20260619-002',
     dispatchNo: 'DSP-20260619-002',
+    sourceProjectNo: 'J99',
+    sourceProjectName: 'Chonburi Prefab Yard',
     destinationProjectNo: 'J99',
     destinationProjectName: 'Chonburi Prefab Yard',
     status: 'Pending Receipt',
@@ -168,6 +173,7 @@ export const dispatchRecords: DispatchRecord[] = [
     items: [
       {
         receiveNo: 'RCV-2026-005',
+        stockReceiveNo: 'RCV-2026-005',
         prNo: 'PR-2605-169',
         poNo: 'PO-2606-0070',
         itemNo: 'ADM-MIX-R7',
@@ -188,6 +194,8 @@ export const dispatchRecords: DispatchRecord[] = [
   {
     id: 'DSP-20260620-003',
     dispatchNo: 'DSP-20260620-003',
+    sourceProjectNo: 'J91',
+    sourceProjectName: 'Ayutthaya Logistics Hub',
     destinationProjectNo: 'J91',
     destinationProjectName: 'Ayutthaya Logistics Hub',
     status: 'Received at Site',
@@ -195,6 +203,7 @@ export const dispatchRecords: DispatchRecord[] = [
     items: [
       {
         receiveNo: 'RCV-2026-004',
+        stockReceiveNo: 'RCV-2026-004',
         prNo: 'PR-2605-152',
         poNo: 'PO-2606-0068',
         itemNo: 'CBL-CU-25SQ',
@@ -214,5 +223,45 @@ export const dispatchRecords: DispatchRecord[] = [
     receivedAt: '2026-06-20T11:20:00.000Z',
     receivedByName: 'Arisa Site',
     receivedByEmail: 'arisa.site@cmg.local',
+  },
+];
+
+export const receivingRequests: ReceivingRequest[] = [
+  {
+    id: 'REQ-RP26PRJ-2026-J-074-0173',
+    receiveNo: 'RP26PRJ-2026-J-074-0173',
+    poNo: 'PO26J74-CC0009',
+    prNo: 'J74-CC-007',
+    poType: 'Material',
+    projectId: 'J-74',
+    projectNo: 'J74',
+    projectName: 'CMG Rama II Warehouse',
+    projectItemCode: 'J74',
+    location: 'Store J74',
+    vendorName: 'บริษัท ซูน ครัช จำกัด',
+    receiveName: 'Pray Pathnalin',
+    receiveDate: '2026-05-28',
+    receivedByUid: 'wLQlMKep9SdsK1eE5aIelvv6NbI2',
+    receivedByName: 'Pray Pathnalin',
+    note: 'Auto receive from PO approval (PO26J74-CC0009)',
+    sourceApp: 'PR, PO System',
+    externalDocId: '3cArAHtR7r1hAxgf5dNV',
+    requestStatus: 'pending',
+    items: [
+      {
+        itemNo: 'ML-CC-0107',
+        itemDescription: 'คอนกรีต Str.40&ksc.Cu.357ksc.Cy.Sl.10.0+/-2.5',
+        orderedQty: 30,
+        receivedQty: 30,
+        unit: 'ลบ.ม.',
+        price: 2260,
+        amount: 67800,
+        materialNo: 'ML-CC-0107',
+        photos: [],
+      },
+    ],
+    totalQty: 30,
+    totalAmount: 67800,
+    requestedAt: '2026-05-28T03:30:00.000Z',
   },
 ];

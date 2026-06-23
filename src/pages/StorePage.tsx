@@ -14,13 +14,18 @@ export function StorePage() {
   const { stockItems, receiveNewItem, activeProjectNo } = useInventory();
   const { canReceiveStock, isReadOnly } = useRole();
   const [query, setQuery] = useState('');
+  const activeStoreLocations = useMemo(
+    () => ['Store Center', activeProjectNo ? `Store ${activeProjectNo}` : ''].filter(Boolean),
+    [activeProjectNo]
+  );
 
-  // Filter items that are currently located in the central store ("Store Center") and belong to the active project
   const storeItems = useMemo(() => {
     return stockItems.filter(
-      (item) => item.location === 'Store Center' && item.purchasedForProject.includes(activeProjectNo),
+      (item) =>
+        activeStoreLocations.includes(item.location) &&
+        item.purchasedForProject === `Project ${activeProjectNo}`,
     );
-  }, [stockItems, activeProjectNo]);
+  }, [activeProjectNo, activeStoreLocations, stockItems]);
 
   const filteredItems = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -45,7 +50,6 @@ export function StorePage() {
     });
   }, [query, storeItems]);
 
-  // Compute metrics for the items in Store Center
   const stockValue = useMemo(() => {
     return filteredItems.reduce((sum, item) => sum + item.amount, 0);
   }, [filteredItems]);
@@ -90,12 +94,12 @@ export function StorePage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Central Store"
+        eyebrow="Project Store"
         title="Store Inventory"
         description={
           activeProjectNo
-            ? `Detailed list of stock items held in central Store Center warehouse for Project ${activeProjectNo}.`
-            : 'Detailed list of stock items held in the central Store Center warehouse.'
+            ? `Detailed list of items currently held in the store of Project ${activeProjectNo}, including central stock and received dispatches.`
+            : 'Detailed list of items currently held in the active project store.'
         }
         actions={
           <>
@@ -134,13 +138,13 @@ export function StorePage() {
         <StatCard
           label="Stock Value in Store"
           value={`${stockValue.toLocaleString()} THB`}
-          detail="Total value of items in Store Center"
+          detail="Total value of items in the active project store"
           tone="purple"
         />
         <StatCard
           label="Total Quantity"
           value={totalQty.toLocaleString()}
-          detail="Total units of items in Store Center"
+          detail="Total units of items in the active project store"
           tone="pink"
         />
         <StatCard
@@ -158,8 +162,10 @@ export function StorePage() {
               <th>Date-Sequence</th>
               <th>PR No.</th>
               <th>Purchased For Project</th>
+              <th>Store Location</th>
               <th>Vendor Name</th>
               <th>Item Summary</th>
+              <th className="numeric">QTY</th>
               <th>Status</th>
               <th className="numeric">Amount</th>
             </tr>
@@ -170,15 +176,17 @@ export function StorePage() {
                 <td>{item.receiveDate}</td>
                 <td>{item.prNo}</td>
                 <td>{item.purchasedForProject}</td>
+                <td>{item.location}</td>
                 <td>{item.vendorName}</td>
                 <td>
                   <span className="itemSummaryCompact">
                     <strong>{item.itemDescription}</strong>
                     <span className="itemCodeCompact">
-                      ({item.itemNo} / Qty {item.qty})
+                      ({item.itemNo})
                     </span>
                   </span>
                 </td>
+                <td className="numeric">{item.qty.toLocaleString()}</td>
                 <td>
                   <StatusBadge status={item.status} />
                 </td>
@@ -187,8 +195,8 @@ export function StorePage() {
             ))}
             {filteredItems.length === 0 ? (
               <tr>
-                <td colSpan={7} style={{ textAlign: 'center', padding: '24px', color: 'var(--color-on-surface-variant)' }}>
-                  No items in Store Center match the current filters.
+                <td colSpan={9} style={{ textAlign: 'center', padding: '24px', color: 'var(--color-on-surface-variant)' }}>
+                  No items in the active project store match the current filters.
                 </td>
               </tr>
             ) : null}

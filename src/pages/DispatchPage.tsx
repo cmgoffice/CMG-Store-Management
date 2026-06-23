@@ -21,64 +21,85 @@ function formatDateTime(value?: string) {
   }).format(new Date(value));
 }
 
-function readFileAsDataUrl(file: File) {
-  return new Promise<string>((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(new Error(`Failed to read file: ${file.name}`));
-    reader.readAsDataURL(file);
-  });
+function createDefaultQuantityMap(receiveNos: string[]) {
+  return receiveNos.reduce<Record<string, string>>((acc, receiveNo) => {
+    acc[receiveNo] = '';
+    return acc;
+  }, {});
 }
 
 export function DispatchPage() {
   const {
     projects,
+    activeProjects,
     stockItems,
     dispatchRecords,
     createDispatch,
     receiveDispatch,
+    activeProjectNo,
   } = useInventory();
-  const { canApproveReceipt, canDispatch, activeRole } = useRole();
+  const { canDispatch } = useRole();
   const [activeTab, setActiveTab] = useState<DispatchTab>('dispatch');
   const [query, setQuery] = useState('');
-  const [selectedItems, setSelectedItems] = useState<string[]>([]);
   const [selectedProject, setSelectedProject] = useState('');
   const [transport, setTransport] = useState('');
   const [note, setNote] = useState('');
+  const [photoFiles, setPhotoFiles] = useState<File[]>([]);
   const [photoUrls, setPhotoUrls] = useState<string[]>([]);
   const [photoNames, setPhotoNames] = useState<string[]>([]);
+  const [dispatchQuantities, setDispatchQuantities] = useState<Record<string, string>>({});
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [receivingDispatchId, setReceivingDispatchId] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState('');
 
-  useEffect(() => {
-    if (!selectedProject && projects.length > 0) {
-      setSelectedProject(projects[0].projectNo);
-    }
-  }, [projects, selectedProject]);
-
   const normalizedQuery = query.trim().toLowerCase();
+  const activeProject = activeProjects.find((project) => project.projectNo === activeProjectNo)
+    ?? projects.find((project) => project.projectNo === activeProjectNo);
+  const destinationProjects = useMemo(
+    () => activeProjects.filter((project) => project.projectNo !== activeProjectNo),
+    [activeProjectNo, activeProjects]
+  );
+
+  useEffect(() => {
+    if (!selectedProject || selectedProject === activeProjectNo) {
+      setSelectedProject(destinationProjects[0]?.projectNo ?? '');
+    }
+  }, [activeProjectNo, destinationProjects, selectedProject]);
 
   const dispatchableItems = useMemo(() => {
     return stockItems.filter((item) => {
-      const isPending = item.status === 'Pending Dispatch';
+      const isReadyForDispatch =
+        item.status === 'Pending Dispatch' &&
+        item.location === 'Store Center' &&
+        item.purchasedForProject === `Project ${activeProjectNo}`;
       const matchesQuery =
         !normalizedQuery ||
-        [item.receiveNo, item.prNo, item.itemDescription, item.vendorName, item.purchasedForProject]
+        [
+          item.receiveNo,
+          item.prNo,
+          item.itemDescription,
+          item.vendorName,
+          item.purchasedForProject,
+          item.itemNo,
+        ]
           .join(' ')
           .toLowerCase()
           .includes(normalizedQuery);
-      return isPending && matchesQuery;
+      return isReadyForDispatch && matchesQuery;
     });
-  }, [normalizedQuery, stockItems]);
+  }, [activeProjectNo, normalizedQuery, stockItems]);
 
   const pendingReceipts = useMemo(() => {
     return dispatchRecords.filter((record) => {
+      const isRelatedToActiveProject =
+        record.sourceProjectNo === activeProjectNo || record.destinationProjectNo === activeProjectNo;
       const matchesQuery =
         !normalizedQuery ||
         [
           record.dispatchNo,
+          record.sourceProjectNo,
+          record.sourceProjectName,
           record.destinationProjectNo,
           record.destinationProjectName,
           record.transport,
@@ -89,16 +110,20 @@ export function DispatchPage() {
           .join(' ')
           .toLowerCase()
           .includes(normalizedQuery);
-      return record.status === 'Pending Receipt' && matchesQuery;
+      return isRelatedToActiveProject && record.status === 'Pending Receipt' && matchesQuery;
     });
-  }, [dispatchRecords, normalizedQuery]);
+  }, [activeProjectNo, dispatchRecords, normalizedQuery]);
 
   const receivedDispatches = useMemo(() => {
     return dispatchRecords.filter((record) => {
+      const isRelatedToActiveProject =
+        record.sourceProjectNo === activeProjectNo || record.destinationProjectNo === activeProjectNo;
       const matchesQuery =
         !normalizedQuery ||
         [
           record.dispatchNo,
+          record.sourceProjectNo,
+          record.sourceProjectName,
           record.destinationProjectNo,
           record.destinationProjectName,
           record.transport,
@@ -110,78 +135,108 @@ export function DispatchPage() {
           .join(' ')
           .toLowerCase()
           .includes(normalizedQuery);
-      return record.status === 'Received at Site' && matchesQuery;
+      return isRelatedToActiveProject && record.status === 'Received at Site' && matchesQuery;
     });
-  }, [dispatchRecords, normalizedQuery]);
+  }, [activeProjectNo, dispatchRecords, normalizedQuery]);
 
-  const selectedStockItems = useMemo(() => {
-    return stockItems.filter((item) => selectedItems.includes(item.receiveNo));
-  }, [selectedItems, stockItems]);
+  const selectedDraftItems = useMemo(() => {
+    return dispatchableItems
+      .map((item) => ({
+        item,
+        qty: Number(dispatchQuantities[item.receiveNo] || 0),
+      }))
+      .filter(({ qty }) => Number.isFinite(qty) && qty > 0);
+  }, [dispatchQuantities, dispatchableItems]);
 
-  const toggleItem = (receiveNo: string) => {
-    setSelectedItems((current) =>
-      current.includes(receiveNo)
-        ? current.filter((item) => item !== receiveNo)
-        : [...current, receiveNo]
-    );
+  const selectedQtyTotal = useMemo(() => {
+    return selectedDraftItems.reduce((sum, item) => sum + item.qty, 0);
+  }, [selectedDraftItems]);
+
+  const resetModalState = () => {
+    photoUrls.forEach((url) => URL.revokeObjectURL(url));
+    setTransport('');
+    setNote('');
+    setPhotoFiles([]);
+    setPhotoUrls([]);
+    setPhotoNames([]);
+    setUploadError('');
+    setDispatchQuantities(createDefaultQuantityMap(dispatchableItems.map((item) => item.receiveNo)));
+    setSelectedProject(destinationProjects[0]?.projectNo ?? '');
   };
 
   const closeModal = () => {
     setIsModalOpen(false);
-    setTransport('');
-    setNote('');
-    setPhotoUrls([]);
-    setPhotoNames([]);
-    setUploadError('');
+    resetModalState();
   };
 
   const handleOpenModal = () => {
-    if (!canDispatch || selectedItems.length === 0) {
+    if (!canDispatch || dispatchableItems.length === 0) {
       return;
     }
+
+    resetModalState();
     setIsModalOpen(true);
   };
 
-  const handleFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+  const handleQtyChange = (receiveNo: string, value: string) => {
+    if (value !== '' && !/^\d+$/.test(value)) {
+      return;
+    }
+
+    setDispatchQuantities((current) => ({
+      ...current,
+      [receiveNo]: value,
+    }));
+  };
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || []);
     if (!files.length) {
       return;
     }
 
-    setUploadError('');
+    const allowedCount = Math.max(0, 5 - photoFiles.length);
+    const nextFiles = files.slice(0, allowedCount);
 
-    try {
-      const nextUrls = await Promise.all(files.map((file) => readFileAsDataUrl(file)));
-      setPhotoUrls((current) => [...current, ...nextUrls].slice(0, 5));
-      setPhotoNames((current) => [...current, ...files.map((file) => file.name)].slice(0, 5));
-    } catch (error) {
-      console.error('Failed to load image attachments:', error);
-      setUploadError('Unable to attach one or more images. Please try again.');
-    } finally {
+    if (!nextFiles.length) {
+      setUploadError('You can attach up to 5 photos per dispatch request.');
       event.target.value = '';
+      return;
     }
+
+    setUploadError('');
+    const nextUrls = nextFiles.map((file) => URL.createObjectURL(file));
+    setPhotoFiles((current) => [...current, ...nextFiles]);
+    setPhotoUrls((current) => [...current, ...nextUrls]);
+    setPhotoNames((current) => [...current, ...nextFiles.map((file) => file.name)]);
+    event.target.value = '';
   };
 
   const removePhoto = (index: number) => {
+    URL.revokeObjectURL(photoUrls[index]);
+    setPhotoFiles((current) => current.filter((_, currentIndex) => currentIndex !== index));
     setPhotoUrls((current) => current.filter((_, currentIndex) => currentIndex !== index));
     setPhotoNames((current) => current.filter((_, currentIndex) => currentIndex !== index));
   };
 
   const handleDispatchSubmit = async () => {
-    if (!selectedItems.length || !selectedProject || isSubmitting) {
+    if (!activeProjectNo || !selectedProject || !selectedDraftItems.length || isSubmitting) {
       return;
     }
 
     setIsSubmitting(true);
     try {
       await createDispatch({
-        receiveNos: selectedItems,
+        sourceProjectNo: activeProjectNo,
+        items: selectedDraftItems.map(({ item, qty }) => ({
+          receiveNo: item.receiveNo,
+          qty: Math.min(qty, item.qty),
+        })),
         projectNo: selectedProject,
         transport,
         note,
-        photoUrls,
+        photos: photoFiles,
       });
-      setSelectedItems([]);
       closeModal();
     } catch (error) {
       console.error('Failed to create dispatch:', error);
@@ -210,23 +265,27 @@ export function DispatchPage() {
       <PageHeader
         eyebrow="Store"
         title="Dispatch"
-        description="Create transfer documents, track project receipts, and review completed dispatch history."
+        description={
+          activeProject
+            ? `Dispatch stock from Store of Project ${activeProject.projectNo} and receive incoming requests for the same active project.`
+            : 'Dispatch stock between project stores and review completed dispatch history.'
+        }
         actions={
           <>
             <SearchField
               value={query}
               onChange={setQuery}
-              placeholder={activeTab === 'dispatch' ? 'Search stock or pending receipts' : 'Search dispatch history'}
+              placeholder={activeTab === 'dispatch' ? 'Search store stock or pending dispatches' : 'Search dispatch history'}
             />
             {activeTab === 'dispatch' ? (
               <button
                 className={styles.primaryButton}
                 type="button"
-                disabled={!canDispatch || selectedItems.length === 0}
+                disabled={!canDispatch || dispatchableItems.length === 0}
                 onClick={handleOpenModal}
               >
                 <Send size={16} />
-                <span>Dispatch Selected ({selectedItems.length})</span>
+                <span>Dispatch Selected</span>
               </button>
             ) : null}
           </>
@@ -239,7 +298,7 @@ export function DispatchPage() {
           className={`${styles.tabButton} ${activeTab === 'dispatch' ? styles.tabButtonActive : ''}`}
           onClick={() => setActiveTab('dispatch')}
         >
-          Dispatch to Site
+          Dispatch
         </button>
         <button
           type="button"
@@ -252,7 +311,7 @@ export function DispatchPage() {
 
       {!canDispatch && activeTab === 'dispatch' ? (
         <div className={styles.notice}>
-          Current role is <strong>{activeRole}</strong>. Dispatch creation is available only for Store Center.
+          Dispatch creation is available for Store Center only, but every role can still receive items for the active destination project.
         </div>
       ) : null}
 
@@ -264,7 +323,7 @@ export function DispatchPage() {
                 <PackageCheck size={18} />
               </div>
               <div>
-                <div className={styles.summaryLabel}>Ready to Dispatch</div>
+                <div className={styles.summaryLabel}>Ready in Active Store</div>
                 <div className={styles.summaryValue}>{dispatchableItems.length}</div>
               </div>
             </article>
@@ -282,7 +341,7 @@ export function DispatchPage() {
                 <CheckCircle2 size={18} />
               </div>
               <div>
-                <div className={styles.summaryLabel}>Completed Dispatch</div>
+                <div className={styles.summaryLabel}>Logged Dispatch</div>
                 <div className={styles.summaryValue}>{receivedDispatches.length}</div>
               </div>
             </article>
@@ -291,11 +350,15 @@ export function DispatchPage() {
           <section className={styles.panel}>
             <div className={styles.sectionHeader}>
               <div>
-                <h2>Available Stock for Dispatch</h2>
-                <p>Select items that will be moved from the store to a project site.</p>
+                <h2>Store Items of Active Project</h2>
+                <p>
+                  {activeProject
+                    ? `Only items in Store Center for Project ${activeProject.projectNo} are available to dispatch.`
+                    : 'Select an active project from the mini sidebar to start dispatching.'}
+                </p>
               </div>
               <div className={styles.selectionNote}>
-                {selectedItems.length} item(s) selected
+                Active: {activeProject?.projectNo ?? '-'}
               </div>
             </div>
 
@@ -303,29 +366,20 @@ export function DispatchPage() {
               <table className="table">
                 <thead>
                   <tr>
-                    <th>Select</th>
-                    <th>Date-Sequence</th>
+                    <th>Receive No.</th>
                     <th>PR No.</th>
-                    <th>Purchased For Project</th>
+                    <th>Purchased For</th>
                     <th>Current Location</th>
                     <th>Vendor Name</th>
                     <th>Item Summary</th>
+                    <th className="numeric">Available Qty</th>
                     <th>Status</th>
                   </tr>
                 </thead>
                 <tbody>
                   {dispatchableItems.map((item) => (
                     <tr key={item.receiveNo}>
-                      <td>
-                        <input
-                          type="checkbox"
-                          checked={selectedItems.includes(item.receiveNo)}
-                          disabled={!canDispatch}
-                          onChange={() => toggleItem(item.receiveNo)}
-                          aria-label={`Select ${item.itemDescription}`}
-                        />
-                      </td>
-                      <td>{item.receiveDate}</td>
+                      <td>{item.receiveNo}</td>
                       <td>{item.prNo}</td>
                       <td>{item.purchasedForProject}</td>
                       <td>{item.location}</td>
@@ -333,11 +387,10 @@ export function DispatchPage() {
                       <td>
                         <span className="itemSummary">
                           <strong>{item.itemDescription}</strong>
-                          <span className="itemCode">
-                            {item.itemNo} / Qty {item.qty}
-                          </span>
+                          <span className="itemCode">{item.itemNo}</span>
                         </span>
                       </td>
+                      <td className="numeric">{item.qty.toLocaleString()}</td>
                       <td>
                         <StatusBadge status={item.status} />
                       </td>
@@ -346,7 +399,7 @@ export function DispatchPage() {
                   {dispatchableItems.length === 0 ? (
                     <tr>
                       <td colSpan={8} className={styles.empty}>
-                        No stock items are ready for dispatch with the current search.
+                        No stock items in the active project store matched the current search.
                       </td>
                     </tr>
                   ) : null}
@@ -358,8 +411,8 @@ export function DispatchPage() {
           <section className={styles.panel}>
             <div className={styles.sectionHeader}>
               <div>
-                <h2>Waiting for Site Receipt</h2>
-                <p>Dispatch records will stay here until the destination project confirms receipt.</p>
+                <h2>Waiting for Receipt</h2>
+                <p>Dispatch requests remain here until the destination project receives them into its store.</p>
               </div>
             </div>
 
@@ -368,9 +421,9 @@ export function DispatchPage() {
                 <thead>
                   <tr>
                     <th>Dispatch No.</th>
-                    <th>Destination</th>
+                    <th>Route</th>
                     <th>Dispatched At</th>
-                    <th>Transport</th>
+                    <th>Vehicle Plate</th>
                     <th>Items</th>
                     <th>Attachment</th>
                     <th>Sent By</th>
@@ -379,79 +432,87 @@ export function DispatchPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {pendingReceipts.map((record) => (
-                    <tr key={record.id}>
-                      <td>
-                        <span className={styles.dispatchCode}>{record.dispatchNo}</span>
-                      </td>
-                      <td>
-                        <div className={styles.projectCell}>
-                          <strong>Project {record.destinationProjectNo}</strong>
-                          <span>{record.destinationProjectName}</span>
-                        </div>
-                      </td>
-                      <td>{formatDateTime(record.dispatchedAt)}</td>
-                      <td>{record.transport || '-'}</td>
-                      <td>
-                        <div className={styles.itemStack}>
-                          {record.items.map((item) => (
-                            <span key={item.receiveNo} className={styles.itemChip}>
-                              {item.receiveNo} / {item.itemDescription} / Qty {item.qty}
-                            </span>
-                          ))}
-                          {record.note ? <span className={styles.noteText}>Note: {record.note}</span> : null}
-                        </div>
-                      </td>
-                      <td>
-                        {record.photoUrls.length > 0 ? (
-                          <div className={styles.photoList}>
-                            {record.photoUrls.map((url, index) => (
-                              <a
-                                key={`${record.id}-${index}`}
-                                href={url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className={styles.photoLink}
-                              >
-                                Photo {index + 1}
-                              </a>
-                            ))}
-                          </div>
-                        ) : (
-                          <span className={styles.mutedText}>No photo</span>
-                        )}
-                      </td>
-                      <td>{record.dispatchedByName}</td>
-                      <td>
-                        <StatusBadge status={record.status} />
-                      </td>
-                      <td>
-                        {canApproveReceipt ? (
-                          <button
-                            className={styles.secondaryButton}
-                            type="button"
-                            disabled={receivingDispatchId !== null}
-                            onClick={() => handleReceiveDispatch(record.id)}
-                          >
-                            {receivingDispatchId === record.id ? (
-                              <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                            ) : (
-                              <CheckCircle2 size={16} />
-                            )}
+                  {pendingReceipts.map((record) => {
+                    const canReceiveForActiveProject = record.destinationProjectNo === activeProjectNo;
+                    const sourceProjectNo = record.sourceProjectNo || '-';
+                    const sourceProjectName = record.sourceProjectName || 'Unknown source project';
+
+                    return (
+                      <tr key={record.id}>
+                        <td>
+                          <span className={styles.dispatchCode}>{record.dispatchNo}</span>
+                        </td>
+                        <td>
+                          <div className={styles.projectCell}>
+                            <strong>
+                              {sourceProjectNo} to {record.destinationProjectNo}
+                            </strong>
                             <span>
-                              {receivingDispatchId === record.id ? 'Receiving...' : 'Receive'}
+                              {sourceProjectName} to {record.destinationProjectName}
                             </span>
-                          </button>
-                        ) : (
-                          <span className={styles.mutedText}>Awaiting site team</span>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
+                          </div>
+                        </td>
+                        <td>{formatDateTime(record.dispatchedAt)}</td>
+                        <td>{record.transport || '-'}</td>
+                        <td>
+                          <div className={styles.itemStack}>
+                            {record.items.map((item) => (
+                              <span key={`${record.id}-${item.stockReceiveNo}`} className={styles.itemChip}>
+                                {item.receiveNo} / {item.itemDescription} / Qty {item.qty}
+                              </span>
+                            ))}
+                            {record.note ? <span className={styles.noteText}>Note: {record.note}</span> : null}
+                          </div>
+                        </td>
+                        <td>
+                          {record.photoUrls.length > 0 ? (
+                            <div className={styles.photoList}>
+                              {record.photoUrls.map((url, index) => (
+                                <a
+                                  key={`${record.id}-${index}`}
+                                  href={url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className={styles.photoLink}
+                                >
+                                  Photo {index + 1}
+                                </a>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className={styles.mutedText}>No photo</span>
+                          )}
+                        </td>
+                        <td>{record.dispatchedByName}</td>
+                        <td>
+                          <StatusBadge status={record.status} />
+                        </td>
+                        <td>
+                          {canReceiveForActiveProject ? (
+                            <button
+                              className={styles.secondaryButton}
+                              type="button"
+                              disabled={receivingDispatchId !== null}
+                              onClick={() => handleReceiveDispatch(record.id)}
+                            >
+                              {receivingDispatchId === record.id ? (
+                                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                              ) : (
+                                <CheckCircle2 size={16} />
+                              )}
+                              <span>{receivingDispatchId === record.id ? 'Receiving...' : 'Receive'}</span>
+                            </button>
+                          ) : (
+                            <span className={styles.mutedText}>Waiting for destination project</span>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })}
                   {pendingReceipts.length === 0 ? (
                     <tr>
                       <td colSpan={9} className={styles.empty}>
-                        No dispatch records are waiting for receipt.
+                        No dispatch records are waiting for receipt in this active project view.
                       </td>
                     </tr>
                   ) : null}
@@ -465,7 +526,7 @@ export function DispatchPage() {
           <div className={styles.sectionHeader}>
             <div>
               <h2>Dispatch History</h2>
-              <p>Track who sent goods, when they were dispatched, and when the receiving project confirmed them.</p>
+              <p>Once the destination project receives a request, it is moved here automatically.</p>
             </div>
           </div>
 
@@ -474,7 +535,7 @@ export function DispatchPage() {
               <thead>
                 <tr>
                   <th>Dispatch No.</th>
-                  <th>Destination</th>
+                  <th>Route</th>
                   <th>Item Summary</th>
                   <th>Sent By</th>
                   <th>Dispatched At</th>
@@ -491,18 +552,22 @@ export function DispatchPage() {
                     </td>
                     <td>
                       <div className={styles.projectCell}>
-                        <strong>Project {record.destinationProjectNo}</strong>
-                        <span>{record.destinationProjectName}</span>
+                        <strong>
+                          {record.sourceProjectNo || '-'} to {record.destinationProjectNo}
+                        </strong>
+                        <span>
+                          {record.sourceProjectName || 'Unknown source project'} to {record.destinationProjectName}
+                        </span>
                       </div>
                     </td>
                     <td>
                       <div className={styles.itemStack}>
                         {record.items.map((item) => (
-                          <span key={item.receiveNo} className={styles.itemChip}>
+                          <span key={`${record.id}-${item.stockReceiveNo}`} className={styles.itemChip}>
                             {item.receiveNo} / {item.itemDescription} / Qty {item.qty}
                           </span>
                         ))}
-                        {record.transport ? <span className={styles.noteText}>Transport: {record.transport}</span> : null}
+                        {record.transport ? <span className={styles.noteText}>Vehicle Plate: {record.transport}</span> : null}
                         {record.note ? <span className={styles.noteText}>Note: {record.note}</span> : null}
                       </div>
                     </td>
@@ -534,7 +599,7 @@ export function DispatchPage() {
             <div className={styles.modalHeader}>
               <div>
                 <h3>Create Dispatch Record</h3>
-                <p>Choose the destination project and add transport details before sending.</p>
+                <p>Select store items from the active project, set quantities, then choose the destination project.</p>
               </div>
               <button type="button" className={styles.iconButton} onClick={closeModal} aria-label="Close modal">
                 <X size={18} />
@@ -542,6 +607,11 @@ export function DispatchPage() {
             </div>
 
             <div className={styles.modalBody}>
+              <div className={styles.modalInfo}>
+                <span>Source Project</span>
+                <strong>{activeProject ? `Project ${activeProject.projectNo} - ${activeProject.projectName}` : '-'}</strong>
+              </div>
+
               <div className={styles.formGrid}>
                 <label className={styles.field}>
                   <span>Destination Project</span>
@@ -550,7 +620,7 @@ export function DispatchPage() {
                     value={selectedProject}
                     onChange={(event) => setSelectedProject(event.target.value)}
                   >
-                    {projects.map((project) => (
+                    {destinationProjects.map((project) => (
                       <option key={project.projectNo} value={project.projectNo}>
                         Project {project.projectNo} - {project.projectName}
                       </option>
@@ -559,15 +629,47 @@ export function DispatchPage() {
                 </label>
 
                 <label className={styles.field}>
-                  <span>Transport</span>
+                  <span>Vehicle Registration</span>
                   <input
                     className={styles.input}
                     type="text"
                     value={transport}
                     onChange={(event) => setTransport(event.target.value)}
-                    placeholder="Truck, vendor, courier, or driver name"
+                    placeholder="Truck plate or transport registration"
                   />
                 </label>
+              </div>
+
+              <div className={styles.field}>
+                <span>Select Items and Quantity</span>
+                <div className={styles.dispatchPicker}>
+                  <div className={styles.dispatchPickerHead}>
+                    <span>Receive No.</span>
+                    <span>Item</span>
+                    <span>Available</span>
+                    <span>Dispatch Qty</span>
+                  </div>
+                  <div className={styles.dispatchPickerBody}>
+                    {dispatchableItems.map((item) => (
+                      <div key={item.receiveNo} className={styles.dispatchPickerRow}>
+                        <span>{item.receiveNo}</span>
+                        <span>
+                          {item.itemDescription}
+                          <small>{item.itemNo}</small>
+                        </span>
+                        <span>{item.qty.toLocaleString()}</span>
+                        <input
+                          className={styles.qtyInput}
+                          type="text"
+                          inputMode="numeric"
+                          value={dispatchQuantities[item.receiveNo] ?? ''}
+                          onChange={(event) => handleQtyChange(item.receiveNo, event.target.value)}
+                          placeholder="0"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
               </div>
 
               <label className={styles.field}>
@@ -582,13 +684,13 @@ export function DispatchPage() {
               </label>
 
               <div className={styles.field}>
-                <span>Dispatch Photos</span>
+                <span>Product Photos</span>
                 <label className={styles.uploadBox}>
                   <input type="file" accept="image/*" multiple onChange={handleFileChange} />
                   <ImagePlus size={18} />
                   <div>
-                    <strong>Upload photo evidence</strong>
-                    <p>Attach up to 5 images of loading, packaging, or the vehicle.</p>
+                    <strong>Upload to Firebase Storage</strong>
+                    <p>Attach up to 5 product or vehicle photos for this dispatch.</p>
                   </div>
                 </label>
                 {uploadError ? <div className={styles.errorText}>{uploadError}</div> : null}
@@ -611,17 +713,21 @@ export function DispatchPage() {
 
               <div className={styles.selectedPanel}>
                 <div className={styles.selectedHeader}>
-                  <strong>Selected Items</strong>
-                  <span>{selectedStockItems.length} row(s)</span>
+                  <strong>Selected for Dispatch</strong>
+                  <span>{selectedDraftItems.length} row(s)</span>
+                  <span>Total Qty {selectedQtyTotal.toLocaleString()}</span>
                 </div>
                 <div className={styles.selectedList}>
-                  {selectedStockItems.map((item) => (
+                  {selectedDraftItems.map(({ item, qty }) => (
                     <div key={item.receiveNo} className={styles.selectedRow}>
                       <span>{item.receiveNo}</span>
                       <span>{item.itemDescription}</span>
-                      <span>Qty {item.qty}</span>
+                      <span>Qty {Math.min(qty, item.qty)}</span>
                     </div>
                   ))}
+                  {selectedDraftItems.length === 0 ? (
+                    <div className={styles.helperText}>Enter dispatch quantity for at least one item.</div>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -633,7 +739,7 @@ export function DispatchPage() {
               <button
                 type="button"
                 className={styles.primaryButton}
-                disabled={!selectedProject || selectedStockItems.length === 0 || isSubmitting}
+                disabled={!selectedProject || selectedDraftItems.length === 0 || isSubmitting}
                 onClick={handleDispatchSubmit}
               >
                 {isSubmitting ? (
@@ -641,7 +747,7 @@ export function DispatchPage() {
                 ) : (
                   <Send size={16} />
                 )}
-                <span>{isSubmitting ? 'Saving...' : 'Create Dispatch'}</span>
+                <span>{isSubmitting ? 'Saving...' : 'Dispatch'}</span>
               </button>
             </div>
           </div>

@@ -149,6 +149,26 @@
   gap: 6px;
 }
 
+.modalInfo {
+  display: grid;
+  gap: 4px;
+  padding: 16px 18px;
+  border: 1px solid #dbe6f5;
+  border-radius: 18px;
+  background: #f7fbff;
+}
+
+.modalInfo span {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.modalInfo strong {
+  color: #123257;
+  font-size: 15px;
+}
+
 .projectCell span,
 .mutedText,
 .noteText {
@@ -368,6 +388,62 @@
   font-weight: 600;
 }
 
+.dispatchPicker {
+  overflow: hidden;
+  border: 1px solid #dbe6f5;
+  border-radius: 20px;
+  background: #fff;
+}
+
+.dispatchPickerHead,
+.dispatchPickerRow {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) 110px 120px;
+  gap: 12px;
+  align-items: center;
+}
+
+.dispatchPickerHead {
+  padding: 12px 16px;
+  background: #f5f9ff;
+  color: #36516d;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.dispatchPickerBody {
+  display: grid;
+}
+
+.dispatchPickerRow {
+  padding: 14px 16px;
+  border-top: 1px solid #edf3fb;
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.dispatchPickerRow small {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.qtyInput {
+  width: 100%;
+  border: 1px solid #cdd8e8;
+  border-radius: 12px;
+  background: #fff;
+  color: var(--color-text);
+  font: inherit;
+  padding: 10px 12px;
+  text-align: right;
+}
+
 .previewGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -444,12 +520,26 @@
   font-weight: 600;
 }
 
+.helperText {
+  padding: 14px 12px;
+  border-radius: 14px;
+  background: #fff;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  text-align: center;
+}
+
 @media (max-width: 960px) {
   .summaryGrid {
     grid-template-columns: 1fr;
   }
 
   .formGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .dispatchPickerHead,
+  .dispatchPickerRow {
     grid-template-columns: 1fr;
   }
 }

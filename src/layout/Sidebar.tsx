@@ -56,8 +56,13 @@ const groups = [
   },
 ];
 
+function getMiniProjectLabel(projectNo: string) {
+  const trimmed = projectNo.trim();
+  return trimmed.length <= 3 ? trimmed : trimmed.slice(-3);
+}
+
 export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: SidebarProps) {
-  const { projects, activeProjectNo, setActiveProjectNo } = useInventory();
+  const { projects, activeProjects, activeProjectNo, setActiveProjectNo } = useInventory();
   const { userProfile, logout } = useAuth();
   const { activeRole } = useRole();
   const navigate = useNavigate();
@@ -71,7 +76,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
             return !['Store Center', 'Store Site', 'Keeper'].includes(activeRole);
           }
           if (item.to === '/store/stock') {
-            return !['Store Site', 'Keeper'].includes(activeRole);
+            return !['Admin Site', 'Store Site', 'Keeper', 'Staff'].includes(activeRole);
           }
           if (item.to === '/store/dispatch') {
             return activeRole !== 'Keeper';
@@ -83,8 +88,9 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
       .filter((group) => group.items.length > 0);
   }, [activeRole]);
   const location = useLocation();
-  const miniProjects = useMemo(() => projects.slice(0, 4), [projects]);
-  const activeProject = projects.find((project) => project.projectNo === activeProjectNo);
+  const miniProjects = useMemo(() => activeProjects, [activeProjects]);
+  const activeProject = activeProjects.find((project) => project.projectNo === activeProjectNo)
+    ?? projects.find((project) => project.projectNo === activeProjectNo);
 
   const [pendingCount, setPendingCount] = useState(0);
 
@@ -158,7 +164,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
                 key={project.projectNo}
                 className={`${styles.projectDot} ${
                   activeProjectNo === project.projectNo ? styles.projectActive : ''
-                } ${styles[`projectTone${index + 1}`]}`}
+                } ${styles[`projectTone${(index % 4) + 1}`]}`}
                 type="button"
                 title={`${project.projectNo} - ${project.projectName}`}
                 aria-label={`Switch to ${project.projectNo}`}
@@ -167,7 +173,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
                   setActiveProjectNo(project.projectNo);
                 }}
               >
-                {project.projectNo.replace('J', '')}
+                {getMiniProjectLabel(project.projectNo)}
               </button>
             ))}
             {!['Store Center', 'Store Site', 'Keeper'].includes(activeRole) && (

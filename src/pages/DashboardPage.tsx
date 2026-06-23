@@ -49,7 +49,9 @@ export function DashboardPage() {
         <article className={styles.panel}>
           <div className={styles.panelHeader}>
             <h2>Recent Stock Movement</h2>
-            <Link to="/store/stock">View stock</Link>
+            {['MasterAdmin', 'SuperAdmin', 'Admin', 'Store Center'].includes(activeRole) && (
+              <Link to="/store/stock">View stock</Link>
+            )}
           </div>
           <div className="tableScroll">
             <table className="table">

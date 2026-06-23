@@ -48,7 +48,7 @@ export function App() {
                 <Route
                   path="/store/stock"
                   element={
-                    <ProtectedRoute requireApproved={true} requireRoles={['MasterAdmin', 'SuperAdmin', 'Admin', 'Store Center', 'Admin Site', 'Staff']}>
+                    <ProtectedRoute requireApproved={true} requireRoles={['MasterAdmin', 'SuperAdmin', 'Admin', 'Store Center']}>
                       <StockListPage />
                     </ProtectedRoute>
                   }

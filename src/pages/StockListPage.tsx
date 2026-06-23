@@ -11,21 +11,21 @@ import styles from './StockListPage.module.css';
 type InventoryAvailability = 'Available' | 'Unavailable';
 
 export function StockListPage() {
-  const { stockItems, projects, receiveNewItem } = useInventory();
+  const { stockItems, activeProjects, receiveNewItem } = useInventory();
   const { canReceiveStock, isReadOnly } = useRole();
   const [query, setQuery] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const getProjectHeldQty = (item: StockItem, projectNo: string) => {
-    const projectLocation = `Project ${projectNo}`;
+    const projectLocations = new Set([`Project ${projectNo}`, `Store ${projectNo}`]);
     const isHeldByProject =
-      item.status === 'Received at Site' && item.location.trim() === projectLocation;
+      item.status === 'Received at Site' && projectLocations.has(item.location.trim());
 
     return isHeldByProject ? item.qty : 0;
   };
 
   const getAvailability = (item: StockItem): InventoryAvailability =>
-    projects.some((project) => getProjectHeldQty(item, project.projectNo) > 0)
+    activeProjects.some((project) => getProjectHeldQty(item, project.projectNo) > 0)
       ? 'Available'
       : 'Unavailable';
 
@@ -123,7 +123,7 @@ export function StockListPage() {
               <th>Current Location</th>
               <th>Vendor Name</th>
               <th>Item Summary</th>
-              {projects.map((project) => (
+              {activeProjects.map((project) => (
                 <th key={project.projectNo} className="numeric">
                   {project.projectNo} Qty
                 </th>
@@ -148,7 +148,7 @@ export function StockListPage() {
                     </span>
                   </span>
                 </td>
-                {projects.map((project) => {
+                {activeProjects.map((project) => {
                   const heldQty = getProjectHeldQty(item, project.projectNo);
 
                   return (
@@ -177,7 +177,7 @@ export function StockListPage() {
             {filteredItems.length === 0 && (
               <tr>
                 <td
-                  colSpan={8 + projects.length}
+                  colSpan={8 + activeProjects.length}
                   className="text-center py-6 text-slate-400 font-semibold text-sm"
                 >
                   No inventory items match the current filters.
