@@ -4,6 +4,7 @@ import { StatCard } from '../components/StatCard';
 import { StatusBadge } from '../components/StatusBadge';
 import { useInventory } from '../context/InventoryContext';
 import { useRole } from '../context/RoleContext';
+import { getStockItemId } from '../utils/stockItem';
 import '../styles/tables.css';
 import styles from './DashboardPage.module.css';
 
@@ -66,7 +67,7 @@ export function DashboardPage() {
               </thead>
               <tbody>
                 {stockItems.slice(0, 5).map((item) => (
-                  <tr key={item.receiveNo}>
+                  <tr key={getStockItemId(item)}>
                     <td>{item.receiveDate}</td>
                     <td>{item.prNo}</td>
                     <td>{item.purchasedForProject}</td>

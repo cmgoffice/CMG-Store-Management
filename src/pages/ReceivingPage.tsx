@@ -5,10 +5,11 @@ import { SearchField } from '../components/SearchField';
 import { StatusBadge } from '../components/StatusBadge';
 import { useInventory } from '../context/InventoryContext';
 import { useRole } from '../context/RoleContext';
+import { getStockItemId } from '../utils/stockItem';
 import '../styles/tables.css';
 import styles from './ReceivingPage.module.css';
 
-type ReceivingTab = 'receive' | 'log';
+type ReceivingTab = 'receive' | 'incoming' | 'log';
 
 function formatDateTime(value?: string) {
   if (!value) {
@@ -27,11 +28,18 @@ function formatAmount(value: number) {
   });
 }
 
+function normalizeProjectNoText(value: string) {
+  const projectMatch = value.trim().match(/\bJ[-\s]?0*(\d+)\b/i);
+  return projectMatch ? `J${Number(projectMatch[1])}` : value.trim();
+}
+
 export function ReceivingPage() {
   const {
     projects,
     activeProjects,
+    stockItems,
     receivingRequests,
+    approveReceipt,
     approveReceivingRequest,
     activeProjectNo,
   } = useInventory();
@@ -39,6 +47,7 @@ export function ReceivingPage() {
   const [activeTab, setActiveTab] = useState<ReceivingTab>('receive');
   const [query, setQuery] = useState('');
   const [approvingRequestId, setApprovingRequestId] = useState<string | null>(null);
+  const [approvingIncomingItemId, setApprovingIncomingItemId] = useState<string | null>(null);
 
   const activeProject = activeProjects.find((project) => project.projectNo === activeProjectNo)
     ?? projects.find((project) => project.projectNo === activeProjectNo);
@@ -46,7 +55,9 @@ export function ReceivingPage() {
 
   const filteredRequests = useMemo(() => {
     return receivingRequests.filter((request) => {
-      const isForActiveProject = !activeProjectNo || request.projectNo === activeProjectNo;
+      const isForActiveProject =
+        !activeProjectNo ||
+        normalizeProjectNoText(request.projectNo) === normalizeProjectNoText(activeProjectNo);
       const matchesQuery =
         !normalizedQuery ||
         [
@@ -80,6 +91,31 @@ export function ReceivingPage() {
     () => filteredRequests.filter((request) => request.requestStatus === 'approved'),
     [filteredRequests]
   );
+  const incomingItems = useMemo(() => {
+    return stockItems.filter((item) => {
+      const itemProjectText = `${item.purchasedForProject} ${item.location}`;
+      const isForActiveProject =
+        !activeProjectNo ||
+        normalizeProjectNoText(itemProjectText) === normalizeProjectNoText(activeProjectNo);
+      const matchesQuery =
+        !normalizedQuery ||
+        [
+          item.receiveNo,
+          item.prNo,
+          item.poNo,
+          item.itemNo,
+          item.itemDescription,
+          item.vendorName,
+          item.purchasedForProject,
+          item.location,
+        ]
+          .join(' ')
+          .toLowerCase()
+          .includes(normalizedQuery);
+
+      return item.status === 'In Transit' && isForActiveProject && matchesQuery;
+    });
+  }, [activeProjectNo, normalizedQuery, stockItems]);
 
   const handleApprove = async (requestId: string) => {
     if (approvingRequestId) return;
@@ -90,6 +126,18 @@ export function ReceivingPage() {
       console.error('Failed to receive request into inventory:', error);
     } finally {
       setApprovingRequestId(null);
+    }
+  };
+
+  const handleApproveIncoming = async (stockItemId: string) => {
+    if (approvingIncomingItemId) return;
+    setApprovingIncomingItemId(stockItemId);
+    try {
+      await approveReceipt(stockItemId);
+    } catch (error) {
+      console.error('Failed to approve incoming item:', error);
+    } finally {
+      setApprovingIncomingItemId(null);
     }
   };
 
@@ -107,7 +155,7 @@ export function ReceivingPage() {
           <SearchField
             value={query}
             onChange={setQuery}
-            placeholder={activeTab === 'receive' ? 'Search pending receiving requests' : 'Search receive log'}
+            placeholder={activeTab === 'log' ? 'Search receive log' : 'Search receiving items'}
           />
         }
       />
@@ -122,6 +170,13 @@ export function ReceivingPage() {
         </button>
         <button
           type="button"
+          className={`${styles.tabButton} ${activeTab === 'incoming' ? styles.tabButtonActive : ''}`}
+          onClick={() => setActiveTab('incoming')}
+        >
+          Incoming Items
+        </button>
+        <button
+          type="button"
           className={`${styles.tabButton} ${activeTab === 'log' ? styles.tabButtonActive : ''}`}
           onClick={() => setActiveTab('log')}
         >
@@ -129,7 +184,7 @@ export function ReceivingPage() {
         </button>
       </div>
 
-      {!canApproveReceipt && activeTab === 'receive' ? (
+      {!canApproveReceipt && activeTab !== 'log' ? (
         <div className={styles.notice}>
           Your current role can review receiving requests, but cannot approve them into inventory.
         </div>
@@ -259,6 +314,81 @@ export function ReceivingPage() {
             </div>
           </section>
         </>
+      ) : activeTab === 'incoming' ? (
+        <section className={styles.panel}>
+          <div className={styles.sectionHeader}>
+            <div>
+              <h2>Approve Incoming Items</h2>
+              <p>In-transit stock lines, including PR PO receive payloads, wait here before site receipt is confirmed.</p>
+            </div>
+            <div className={styles.selectionNote}>Active: {activeProject?.projectNo ?? '-'}</div>
+          </div>
+
+          <div className="tableScroll">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Date-Sequence</th>
+                  <th>PR No.</th>
+                  <th>Purchased For Project</th>
+                  <th>Current Location</th>
+                  <th>Vendor Name</th>
+                  <th>Item Summary</th>
+                  <th>Status</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {incomingItems.map((item) => {
+                  const stockItemId = getStockItemId(item);
+
+                  return (
+                    <tr key={stockItemId}>
+                      <td>{item.receiveDate}</td>
+                      <td>{item.prNo}</td>
+                      <td>{item.purchasedForProject}</td>
+                      <td>{item.location}</td>
+                      <td>{item.vendorName}</td>
+                      <td>
+                        <span className="itemSummary">
+                          <strong>{item.itemDescription}</strong>
+                          <span className="itemCode">
+                            {item.itemNo} / Qty {item.qty}
+                          </span>
+                        </span>
+                      </td>
+                      <td>
+                        <StatusBadge status={item.status} />
+                      </td>
+                      <td>
+                        <button
+                          className={styles.approveButton}
+                          type="button"
+                          disabled={!canApproveReceipt || approvingIncomingItemId !== null}
+                          onClick={() => handleApproveIncoming(stockItemId)}
+                        >
+                          {approvingIncomingItemId === stockItemId ? (
+                            <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                          ) : (
+                            <CheckCircle2 size={16} />
+                          )}
+                          <span>{approvingIncomingItemId === stockItemId ? 'Approving...' : 'Approve Receipt'}</span>
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {incomingItems.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className={styles.empty}>
+                      No incoming in-transit items matched the current filters.
+                    </td>
+                  </tr>
+                ) : null}
+              </tbody>
+            </table>
+          </div>
+        </section>
       ) : (
         <section className={styles.panel}>
           <div className={styles.sectionHeader}>

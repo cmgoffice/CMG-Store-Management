@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "gantt-chart-d0b5b"
+  },
+  "targets": {
+    "gantt-chart-d0b5b": {
+      "hosting": {
+        "site02": [
+          "cmg-inventory"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

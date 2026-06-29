@@ -30,6 +30,7 @@ export type ReceivingRequestStatus =
   | 'cancelled';
 
 export interface StockItem {
+  stockItemId?: string;
   receiveNo: string;
   poNo: string;
   prNo: string;
@@ -44,6 +45,25 @@ export interface StockItem {
   receiveName: string;
   receiveDate: string;
   status: StockStatus;
+  sourceApp?: string;
+  sourceReceiveNo?: string;
+  rpNo?: string;
+  receiveType?: string;
+  iditem?: string;
+  materialNo?: string;
+  unit?: string;
+  poItemIndex?: string | number;
+  orderedQty?: number;
+  unitPrice?: number;
+  projectId?: string;
+  vendorId?: string;
+  documentNo?: string;
+  poId?: string | number;
+  receivedByUid?: string;
+  note?: string;
+  lastReceiveEventId?: string;
+  lastReceivedQty?: number;
+  lastReceivedAt?: string;
 }
 
 export interface ReceivingRequestItem {
@@ -94,6 +114,7 @@ export interface ReceivingRequest {
 }
 
 export interface DispatchItemSnapshot {
+  stockItemId?: string;
   receiveNo: string;
   stockReceiveNo: string;
   prNo: string;
@@ -156,4 +177,62 @@ export interface AppMetaConfig {
   firstUserRegistered: boolean;
   totalUsers: number;
   createdAt: Timestamp;
+}
+
+export type PrPoReceiveResponseStatus = 'success' | 'duplicate' | 'ignored' | 'failed';
+
+export interface PrPoReceiveItemPayload {
+  iditem?: string | number;
+  materialNo?: string | number;
+  description?: string;
+  itemName?: string;
+  unit?: string;
+  poItemIndex?: string | number;
+  orderedQty?: string | number;
+  receivedQty?: string | number;
+  qtyReceive?: string | number;
+  price?: string | number;
+  unitPrice?: string | number;
+  amount?: string | number;
+}
+
+export interface PrPoReceivePayload {
+  sourceApp?: string;
+  receiveNo?: string;
+  rpNo?: string;
+  poId?: string | number;
+  poNo?: string;
+  prNo?: string;
+  projectId?: string | number;
+  vendorId?: string | number;
+  vendorName?: string;
+  documentNo?: string;
+  receivedDate?: string;
+  receivedByUid?: string;
+  receivedByName?: string;
+  note?: string;
+  createdAt?: string;
+  receiveType?: string;
+  items?: PrPoReceiveItemPayload[];
+}
+
+export interface PrPoReceiveItemResult {
+  status: PrPoReceiveResponseStatus;
+  message: string;
+  stockItemId?: string;
+  itemKey?: string;
+  itemKeyType?: 'iditem' | 'materialNo';
+  idempotencyKey?: string;
+  qtyIncrement?: number;
+}
+
+export interface PrPoReceiveResponse {
+  status: PrPoReceiveResponseStatus;
+  message: string;
+  receiveNo?: string;
+  processedCount: number;
+  duplicateCount: number;
+  failedCount: number;
+  ignoredCount: number;
+  items: PrPoReceiveItemResult[];
 }

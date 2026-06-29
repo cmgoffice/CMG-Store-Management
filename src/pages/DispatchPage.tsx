@@ -5,6 +5,7 @@ import { SearchField } from '../components/SearchField';
 import { StatusBadge } from '../components/StatusBadge';
 import { useInventory } from '../context/InventoryContext';
 import { useRole } from '../context/RoleContext';
+import { getStockItemId } from '../utils/stockItem';
 import '../styles/tables.css';
 import styles from './DispatchPage.module.css';
 
@@ -21,9 +22,9 @@ function formatDateTime(value?: string) {
   }).format(new Date(value));
 }
 
-function createDefaultQuantityMap(receiveNos: string[]) {
-  return receiveNos.reduce<Record<string, string>>((acc, receiveNo) => {
-    acc[receiveNo] = '';
+function createDefaultQuantityMap(stockItemIds: string[]) {
+  return stockItemIds.reduce<Record<string, string>>((acc, stockItemId) => {
+    acc[stockItemId] = '';
     return acc;
   }, {});
 }
@@ -143,7 +144,7 @@ export function DispatchPage() {
     return dispatchableItems
       .map((item) => ({
         item,
-        qty: Number(dispatchQuantities[item.receiveNo] || 0),
+        qty: Number(dispatchQuantities[getStockItemId(item)] || 0),
       }))
       .filter(({ qty }) => Number.isFinite(qty) && qty > 0);
   }, [dispatchQuantities, dispatchableItems]);
@@ -160,7 +161,7 @@ export function DispatchPage() {
     setPhotoUrls([]);
     setPhotoNames([]);
     setUploadError('');
-    setDispatchQuantities(createDefaultQuantityMap(dispatchableItems.map((item) => item.receiveNo)));
+    setDispatchQuantities(createDefaultQuantityMap(dispatchableItems.map((item) => getStockItemId(item))));
     setSelectedProject(destinationProjects[0]?.projectNo ?? '');
   };
 
@@ -178,14 +179,14 @@ export function DispatchPage() {
     setIsModalOpen(true);
   };
 
-  const handleQtyChange = (receiveNo: string, value: string) => {
+  const handleQtyChange = (stockItemId: string, value: string) => {
     if (value !== '' && !/^\d+$/.test(value)) {
       return;
     }
 
     setDispatchQuantities((current) => ({
       ...current,
-      [receiveNo]: value,
+      [stockItemId]: value,
     }));
   };
 
@@ -229,7 +230,7 @@ export function DispatchPage() {
       await createDispatch({
         sourceProjectNo: activeProjectNo,
         items: selectedDraftItems.map(({ item, qty }) => ({
-          receiveNo: item.receiveNo,
+          receiveNo: getStockItemId(item),
           qty: Math.min(qty, item.qty),
         })),
         projectNo: selectedProject,
@@ -378,7 +379,7 @@ export function DispatchPage() {
                 </thead>
                 <tbody>
                   {dispatchableItems.map((item) => (
-                    <tr key={item.receiveNo}>
+                    <tr key={getStockItemId(item)}>
                       <td>{item.receiveNo}</td>
                       <td>{item.prNo}</td>
                       <td>{item.purchasedForProject}</td>
@@ -651,7 +652,7 @@ export function DispatchPage() {
                   </div>
                   <div className={styles.dispatchPickerBody}>
                     {dispatchableItems.map((item) => (
-                      <div key={item.receiveNo} className={styles.dispatchPickerRow}>
+                      <div key={getStockItemId(item)} className={styles.dispatchPickerRow}>
                         <span>{item.receiveNo}</span>
                         <span>
                           {item.itemDescription}
@@ -662,8 +663,8 @@ export function DispatchPage() {
                           className={styles.qtyInput}
                           type="text"
                           inputMode="numeric"
-                          value={dispatchQuantities[item.receiveNo] ?? ''}
-                          onChange={(event) => handleQtyChange(item.receiveNo, event.target.value)}
+                          value={dispatchQuantities[getStockItemId(item)] ?? ''}
+                          onChange={(event) => handleQtyChange(getStockItemId(item), event.target.value)}
                           placeholder="0"
                         />
                       </div>
@@ -719,7 +720,7 @@ export function DispatchPage() {
                 </div>
                 <div className={styles.selectedList}>
                   {selectedDraftItems.map(({ item, qty }) => (
-                    <div key={item.receiveNo} className={styles.selectedRow}>
+                    <div key={getStockItemId(item)} className={styles.selectedRow}>
                       <span>{item.receiveNo}</span>
                       <span>{item.itemDescription}</span>
                       <span>Qty {Math.min(qty, item.qty)}</span>

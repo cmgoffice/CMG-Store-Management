@@ -5,6 +5,7 @@ import { SearchField } from '../components/SearchField';
 import { useInventory } from '../context/InventoryContext';
 import { useRole } from '../context/RoleContext';
 import type { StockItem } from '../types/models';
+import { getStockItemId } from '../utils/stockItem';
 import '../styles/tables.css';
 import styles from './StockListPage.module.css';
 
@@ -134,7 +135,7 @@ export function StockListPage() {
           </thead>
           <tbody>
             {filteredItems.map((item) => (
-              <tr key={item.receiveNo}>
+              <tr key={getStockItemId(item)}>
                 <td>{item.receiveDate}</td>
                 <td>{item.prNo}</td>
                 <td>{item.purchasedForProject}</td>

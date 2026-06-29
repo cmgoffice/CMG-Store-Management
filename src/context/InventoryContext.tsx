@@ -17,7 +17,9 @@ import {
   onSnapshot,
 } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
+import { APP_NAME } from '../config/firestore';
 import { db, masterDataDb, masterDataProjectsPath, storage } from '../firebase';
+import { processPrPoReceivePayload } from '../services/prPoReceiveIntegration';
 import {
   dispatchRecords as mockDispatchRecords,
   projects as mockProjects,
@@ -26,6 +28,8 @@ import {
 } from '../data/mockData';
 import type {
   DispatchRecord,
+  PrPoReceivePayload,
+  PrPoReceiveResponse,
   Project,
   ProjectStatus,
   ReceivingRequest,
@@ -33,6 +37,7 @@ import type {
   ReceivingRequestStatus,
   StockItem,
 } from '../types/models';
+import { getStockItemId } from '../utils/stockItem';
 import { useAuth } from './AuthContext';
 
 interface CreateDispatchLineInput {
@@ -61,13 +66,13 @@ interface InventoryContextValue {
   approveReceivingRequest: (requestId: string) => Promise<void>;
   receiveDispatch: (dispatchId: string) => Promise<void>;
   receiveNewItem: (item: StockItem) => Promise<void>;
+  receivePrPoPayload: (payload: PrPoReceivePayload) => Promise<PrPoReceiveResponse>;
   activeProjectNo: string;
   setActiveProjectNo: (projectNo: string) => void;
 }
 
 const InventoryContext = createContext<InventoryContextValue | undefined>(undefined);
 
-const APP_NAME = 'CMG-Store-Management';
 const MASTER_LOCKED_FIELDS: NonNullable<Project['lockedFields']> = [
   'projectNo',
   'projectName',
@@ -207,24 +212,37 @@ function normalizeBoolean(value: unknown) {
   return value === true || String(value).trim().toLowerCase() === 'true';
 }
 
-function normalizeProjectNoFromRequest(data: DocumentData) {
-  const directProjectNo = normalizeText(data.projectNo);
-  if (directProjectNo) {
-    return directProjectNo.replace(/^J-(\d+)/i, (_match, digits: string) => `J${digits}`);
-  }
+function normalizeProjectNoText(value: unknown) {
+  const text = normalizeText(value);
+  const projectMatch = text.match(/\bJ[-\s]?0*(\d+)\b/i);
 
-  const projectItemCode = normalizeText(data.projectItemCode);
-  if (projectItemCode) {
-    return projectItemCode;
-  }
-
-  const projectId = normalizeText(data.projectId);
-  const projectMatch = projectId.match(/^J-(\d+)/i);
   if (projectMatch) {
-    return `J${projectMatch[1]}`;
+    return `J${Number(projectMatch[1])}`;
   }
 
-  return projectId;
+  return text;
+}
+
+function normalizeProjectNoFromRequest(data: DocumentData) {
+  const projectCandidates = [
+    data.projectNo,
+    data.projectItemCode,
+    data.projectId,
+    data.receiveNo,
+    data.rpNo,
+    data.documentNo,
+    data.id,
+    data.idempotencyKey,
+  ];
+
+  for (const candidate of projectCandidates) {
+    const projectNo = normalizeProjectNoText(candidate);
+    if (projectNo) {
+      return projectNo;
+    }
+  }
+
+  return '';
 }
 
 function parseReceivingItems(value: unknown) {
@@ -245,20 +263,25 @@ function parseReceivingItems(value: unknown) {
 }
 
 function normalizeReceivingRequestItem(data: DocumentData, index: number): ReceivingRequestItem {
-  const receivedQty = normalizeNumber(data.receivedQty ?? data.qty ?? data.QTY ?? data.quantity);
+  const receivedQty = normalizeNumber(
+    data.receivedQty ?? data.qtyReceive ?? data.qty ?? data.QTY ?? data.quantity
+  );
   const orderedQty = normalizeNumber(data.orderedQty, receivedQty);
-  const price = normalizeNumber(data.price);
+  const price = normalizeNumber(data.price ?? data.unitPrice);
   const amount = normalizeNumber(data.amount, price > 0 ? price * receivedQty : 0);
+  const materialNo = normalizeText(data.materialNo ?? data.iditem);
 
   return {
-    itemNo: normalizeText(data.itemNo ?? data.materialNo) || `ITEM-${String(index + 1).padStart(2, '0')}`,
-    itemDescription: normalizeText(data.itemDescription ?? data.description),
+    itemNo:
+      normalizeText(data.itemNo ?? data.materialNo ?? data.iditem ?? data.descriptionKey) ||
+      `ITEM-${String(index + 1).padStart(2, '0')}`,
+    itemDescription: normalizeText(data.itemDescription ?? data.description ?? data.itemName),
     orderedQty,
     receivedQty,
     unit: normalizeText(data.unit),
     price,
     amount,
-    materialNo: normalizeText(data.materialNo),
+    materialNo,
     photos: normalizeStringArray(data.photos),
     stockReceiveNo: normalizeText(data.stockReceiveNo),
   };
@@ -278,21 +301,21 @@ function normalizeReceivingRequest(data: DocumentData, fallbackId: string): Rece
     receiveNo: normalizeText(data.receiveNo ?? data.rpNo) || fallbackId,
     poNo: normalizeText(data.poNo ?? data.documentNo),
     prNo: normalizeText(data.prNo),
-    poType: normalizeText(data.poType),
+    poType: normalizeText(data.poType ?? data.receiveType),
     poId: normalizeText(data.poId),
     projectId: normalizeText(data.projectId),
     projectNo,
-    projectName: normalizeText(data.projectName) || normalizeText(data.projectId),
+    projectName: normalizeText(data.projectName) || normalizeProjectNoText(data.projectId) || projectNo,
     projectItemCode: normalizeText(data.projectItemCode),
     location: normalizeText(data.location),
     vendorName: normalizeText(data.vendorName),
-    receiveName: normalizeText(data.receiveName),
+    receiveName: normalizeText(data.receiveName ?? data.receivedByName),
     receiveDate: normalizeDateText(data.receiveDate ?? data.receivedDate),
     receivedByUid: normalizeText(data.receivedByUid),
     receivedByName: normalizeText(data.receivedByName),
     note: normalizeText(data.note),
     sourceApp: normalizeText(data.sourceApp) || (normalizeBoolean(data.autoCreatedFromPoApproval) ? 'PO Approval' : ''),
-    externalDocId: normalizeText(data.externalDocId ?? data.poId ?? data.documentNo),
+    externalDocId: normalizeText(data.externalDocId ?? data.poId ?? data.documentNo ?? data.rpNo ?? data.idempotencyKey),
     autoCreatedFromPoApproval: normalizeBoolean(data.autoCreatedFromPoApproval),
     requestStatus: normalizeReceivingRequestStatus(data.requestStatus ?? data.status),
     items,
@@ -514,7 +537,10 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       unsubStock = onSnapshot(
         stockColRef,
         (snapshot) => {
-          const loadedItems = snapshot.docs.map((d) => d.data() as StockItem);
+          const loadedItems = snapshot.docs.map((d) => ({
+            ...(d.data() as StockItem),
+            stockItemId: d.id,
+          }));
           loadedItems.sort((a, b) => b.receiveNo.localeCompare(a.receiveNo));
           setItems(loadedItems);
           setLoading(false);
@@ -645,7 +671,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     const sourceProject = projectList.find((project) => project.projectNo === sourceProjectNo);
     const targetProject = projectList.find((project) => project.projectNo === projectNo);
     const selectedItems = normalizedLines.map((line) => {
-      const sourceItem = items.find((item) => item.receiveNo === line.receiveNo);
+      const sourceItem = items.find((item) => getStockItemId(item) === line.receiveNo);
 
       if (
         !sourceItem ||
@@ -689,10 +715,14 @@ export function InventoryProvider({ children }: PropsWithChildren) {
 
     const dispatchSnapshots = selectedItems.map(({ line, sourceItem }, index) => ({
       receiveNo: sourceItem.receiveNo,
+      stockItemId:
+        line.qty === sourceItem.qty
+          ? getStockItemId(sourceItem)
+          : createDispatchStockReceiveNo(getStockItemId(sourceItem), dispatchNo, index),
       stockReceiveNo:
         line.qty === sourceItem.qty
-          ? sourceItem.receiveNo
-          : createDispatchStockReceiveNo(sourceItem.receiveNo, dispatchNo, index),
+          ? getStockItemId(sourceItem)
+          : createDispatchStockReceiveNo(getStockItemId(sourceItem), dispatchNo, index),
       prNo: sourceItem.prNo,
       poNo: sourceItem.poNo,
       itemNo: sourceItem.itemNo,
@@ -723,7 +753,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
 
     const batch = writeBatch(db);
     selectedItems.forEach(({ line, sourceItem }, index) => {
-      const sourceRef = doc(db, APP_NAME, 'root', 'stockItems', sourceItem.receiveNo);
+      const sourceRef = doc(db, APP_NAME, 'root', 'stockItems', getStockItemId(sourceItem));
       const dispatchedAmount = calculatePartialAmount(sourceItem.amount, sourceItem.qty, line.qty);
       const remainingQty = sourceItem.qty - line.qty;
       const remainingAmount = roundAmount(sourceItem.amount - dispatchedAmount);
@@ -749,6 +779,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       const dispatchedItemRef = doc(db, APP_NAME, 'root', 'stockItems', dispatchedItemId);
       const dispatchedItem: StockItem = {
         ...sourceItem,
+        stockItemId: dispatchedItemId,
         receiveNo: dispatchedItemId,
         qty: line.qty,
         amount: dispatchedAmount,
@@ -825,6 +856,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       const stockReceiveNo = stockReceiveNos[index];
       const stockRef = doc(db, APP_NAME, 'root', 'stockItems', stockReceiveNo);
       const stockItem: StockItem = {
+        stockItemId: stockReceiveNo,
         receiveNo: stockReceiveNo,
         poNo: target.poNo,
         prNo: target.prNo,
@@ -872,7 +904,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     }
 
     const docRef = doc(db, APP_NAME, 'root', 'stockItems', receiveNo);
-    const target = items.find((item) => item.receiveNo === receiveNo);
+    const target = items.find((item) => getStockItemId(item) === receiveNo);
     if (!target) return;
 
     const projectNo = extractProjectNo(target.purchasedForProject);
@@ -888,8 +920,16 @@ export function InventoryProvider({ children }: PropsWithChildren) {
   }, [dispatchList, items, receiveDispatch]);
 
   const receiveNewItem = useCallback(async (item: StockItem) => {
-    const docRef = doc(db, APP_NAME, 'root', 'stockItems', item.receiveNo);
-    await setDoc(docRef, item);
+    const stockItemId = getStockItemId(item);
+    const docRef = doc(db, APP_NAME, 'root', 'stockItems', stockItemId);
+    await setDoc(docRef, {
+      ...item,
+      stockItemId,
+    });
+  }, []);
+
+  const receivePrPoPayload = useCallback(async (payload: PrPoReceivePayload) => {
+    return processPrPoReceivePayload(payload);
   }, []);
 
   const updateProjectStatus = useCallback(async (projectNo: string, status: ProjectStatus) => {
@@ -924,6 +964,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       approveReceivingRequest,
       receiveDispatch,
       receiveNewItem,
+      receivePrPoPayload,
       activeProjectNo,
       setActiveProjectNo,
     }),
@@ -936,6 +977,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       receivingRequestList,
       receiveDispatch,
       receiveNewItem,
+      receivePrPoPayload,
       updateProjectStatus,
       activeVisibleProjects,
       visibleDispatchRecords,
