@@ -6,20 +6,20 @@
 .tabs {
   display: inline-flex;
   gap: 8px;
-  margin-bottom: 18px;
-  padding: 6px;
+  margin-bottom: 10px;
+  padding: 4px;
   border-radius: 8px;
   background: #eef2ff;
 }
 
 .tabButton {
-  min-height: 40px;
+  min-height: 34px;
   border: 0;
   border-radius: 6px;
-  padding: 0 16px;
+  padding: 0 14px;
   color: var(--color-text-muted);
   background: transparent;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
 }
 
@@ -36,22 +36,22 @@
   color: #9a3412;
   font-size: 14px;
   line-height: 20px;
-  margin-bottom: 16px;
-  padding: 12px 14px;
+  margin-bottom: 10px;
+  padding: 10px 12px;
 }
 
 .summaryGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-  margin-bottom: 18px;
+  gap: 12px;
+  margin-bottom: 10px;
 }
 
 .summaryCard {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 18px;
+  gap: 10px;
+  padding: 12px 14px;
   border: 1px solid #dce6f8;
   border-radius: 8px;
   background: linear-gradient(145deg, #fff 0%, #f4f8ff 100%);
@@ -61,8 +61,8 @@
 .summaryIcon {
   display: grid;
   place-items: center;
-  width: 42px;
-  height: 42px;
+  width: 34px;
+  height: 34px;
   border-radius: 8px;
   background: #eaf3ff;
   color: #0b5cad;
@@ -70,25 +70,99 @@
 
 .summaryLabel {
   color: var(--color-text-muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
-  line-height: 16px;
+  line-height: 14px;
 }
 
 .summaryValue {
   color: #123257;
-  font-size: 28px;
+  font-size: 18px;
   font-weight: 800;
-  line-height: 32px;
+  line-height: 22px;
 }
 
 .panel {
-  margin-bottom: 18px;
-  padding: 18px;
+  margin-bottom: 12px;
+  padding: 12px;
   border: 1px solid #dce6f8;
   border-radius: 8px;
   background: #fff;
   box-shadow: 0 18px 36px rgb(40 77 130 / 7%);
+}
+
+.projectGroup + .projectGroup {
+  margin-top: 16px;
+}
+
+.projectGroupHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.projectCodeBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 9999px;
+  background: #e0f2fe;
+  color: #0c4a6e;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.groupMeta {
+  margin-top: 4px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.receivingTable {
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.receivingTable th,
+.receivingTable td {
+  white-space: normal;
+  word-break: break-word;
+}
+
+.receivingTable th:nth-child(1),
+.receivingTable td:nth-child(1) {
+  width: 13%;
+}
+
+.receivingTable th:nth-child(2),
+.receivingTable td:nth-child(2) {
+  width: 10%;
+}
+
+.receivingTable th:nth-child(3),
+.receivingTable td:nth-child(3) {
+  width: 12%;
+}
+
+.receivingTable th:nth-child(4),
+.receivingTable td:nth-child(4) {
+  width: 24%;
+}
+
+.receivingTable th:last-child,
+.receivingTable td:last-child {
+  width: 14%;
+}
+
+.descriptionCell {
+  max-width: 0;
+  color: #23436c;
+  line-height: 1.4;
 }
 
 .sectionHeader {
@@ -96,32 +170,32 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 14px;
+  margin-bottom: 8px;
 }
 
 .sectionHeader h2 {
-  margin: 0 0 4px;
+  margin: 0 0 2px;
   color: #163a63;
-  font-size: 18px;
-  line-height: 24px;
+  font-size: 14px;
+  line-height: 18px;
 }
 
 .sectionHeader p {
   margin: 0;
   color: var(--color-text-muted);
-  font-size: 13px;
-  line-height: 19px;
+  font-size: 11px;
+  line-height: 15px;
 }
 
 .selectionNote {
   display: inline-flex;
   align-items: center;
-  min-height: 34px;
-  padding: 0 12px;
+  min-height: 28px;
+  padding: 0 10px;
   border-radius: 9999px;
   background: #eef6ff;
   color: #0b5cad;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   white-space: nowrap;
 }
@@ -130,19 +204,24 @@
   color: #0f3f6e;
   font-size: 12px;
   font-weight: 700;
+  white-space: normal;
 }
 
 .metaStack,
 .itemStack {
-  display: grid;
+  display: inline-flex;
+  align-items: center;
   gap: 6px;
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .metaStack span,
 .noteText {
   color: var(--color-text-muted);
-  font-size: 12px;
-  line-height: 16px;
+  font-size: 11px;
+  line-height: 14px;
+  white-space: nowrap;
 }
 
 .itemChip,
@@ -150,13 +229,14 @@
   display: inline-flex;
   width: fit-content;
   max-width: 100%;
-  padding: 5px 10px;
+  padding: 3px 8px;
   border-radius: 9999px;
   background: #f3f7fd;
   color: #23436c;
   font-size: 11px;
   font-weight: 600;
   line-height: 14px;
+  white-space: nowrap;
 }
 
 .stockChip {
@@ -166,17 +246,18 @@
 
 .approveButton {
   display: inline-flex;
-  min-height: 36px;
+  min-height: 32px;
   align-items: center;
   gap: 8px;
   border: 0;
   border-radius: 8px;
   background: #107c10;
   color: #fff;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
-  padding: 0 12px;
-  white-space: nowrap;
+  padding: 0 10px;
+  white-space: normal;
+  text-align: center;
 }
 
 .approveButton:disabled {

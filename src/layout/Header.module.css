@@ -8,7 +8,7 @@
   gap: 16px;
   border-bottom: 0;
   background: transparent;
-  padding: 26px 28px 14px;
+  padding: 14px 24px 8px;
   backdrop-filter: blur(12px);
 }
 
@@ -22,22 +22,22 @@
 .system {
   margin: 0;
   color: var(--color-text);
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
-  line-height: 20px;
+  line-height: 16px;
 }
 
 .left span {
   display: block;
   color: var(--color-text-muted);
-  font-size: 12px;
-  line-height: 16px;
+  font-size: 11px;
+  line-height: 14px;
 }
 
 .searchBar {
   display: flex;
   width: min(100%, 540px);
-  height: 48px;
+  height: 40px;
   align-items: center;
   gap: 14px;
   border: 0;
@@ -45,7 +45,7 @@
   background: rgb(255 255 255 / 92%);
   box-shadow: 0 14px 34px rgb(93 72 177 / 8%);
   color: #8a8699;
-  padding: 0 18px 0 20px;
+  padding: 0 14px 0 16px;
 }
 
 .searchBar select {
@@ -55,7 +55,7 @@
   outline: 0;
   background: transparent;
   color: #2b2935;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   padding-right: 16px;
 }
@@ -67,7 +67,7 @@
   outline: 0;
   background: transparent;
   color: #2b2935;
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
 }
 
@@ -83,7 +83,7 @@
 
 .iconButton,
 .roleSwitcher {
-  height: 40px;
+  height: 36px;
   border: 0;
   border-radius: 14px;
   background: rgb(255 255 255 / 88%);
@@ -93,7 +93,7 @@
 
 .iconButton {
   display: inline-flex;
-  width: 40px;
+  width: 36px;
   align-items: center;
   justify-content: center;
 }
@@ -112,7 +112,7 @@
   outline: 0;
   background: transparent;
   color: var(--color-text);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
 }
 
@@ -120,7 +120,7 @@
   .header {
     align-items: flex-start;
     flex-direction: column;
-    padding: 12px 16px;
+    padding: 10px 16px 6px;
   }
 
   .searchBar {
@@ -156,8 +156,8 @@
 }
 
 .headerAvatar {
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   border-radius: 50%;
   object-fit: cover;
   border: 2px solid white;
@@ -165,14 +165,14 @@
 
 .headerAvatarFallback {
   display: inline-flex;
-  width: 40px;
-  height: 40px;
+  width: 36px;
+  height: 36px;
   align-items: center;
   justify-content: center;
   border-radius: 50%;
   background: linear-gradient(135deg, #a78bfa, #7c3aed);
   color: white;
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 800;
   text-transform: uppercase;
   border: 2px solid white;

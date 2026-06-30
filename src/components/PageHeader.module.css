@@ -3,37 +3,38 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 20px;
+  margin-bottom: 12px;
 }
 
 .header h1 {
   margin: 0;
   color: var(--color-text);
-  font-size: 28px;
+  font-size: 20px;
   font-weight: 600;
-  line-height: 36px;
+  line-height: 28px;
 }
 
 .eyebrow {
-  margin: 0 0 4px;
+  margin: 0 0 2px;
   color: var(--color-primary-container);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
-  line-height: 16px;
+  line-height: 14px;
 }
 
 .description {
   max-width: 720px;
-  margin: 6px 0 0;
+  margin: 2px 0 0;
   color: var(--color-text-muted);
-  font-size: 14px;
-  line-height: 20px;
+  font-size: 12px;
+  line-height: 16px;
 }
 
 .actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
 }
 
 @media (max-width: 720px) {
@@ -42,7 +43,7 @@
   }
 
   .header h1 {
-    font-size: 24px;
-    line-height: 32px;
+    font-size: 18px;
+    line-height: 24px;
   }
 }

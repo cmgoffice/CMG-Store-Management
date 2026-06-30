@@ -10,7 +10,6 @@ import {
 import {
   collection,
   doc,
-  getDocs,
   type DocumentData,
   setDoc,
   writeBatch,
@@ -20,12 +19,6 @@ import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { APP_NAME } from '../config/firestore';
 import { db, masterDataDb, masterDataProjectsPath, storage } from '../firebase';
 import { processPrPoReceivePayload } from '../services/prPoReceiveIntegration';
-import {
-  dispatchRecords as mockDispatchRecords,
-  projects as mockProjects,
-  receivingRequests as mockReceivingRequests,
-  stockItems as mockStockItems,
-} from '../data/mockData';
 import type {
   DispatchRecord,
   PrPoReceivePayload,
@@ -111,6 +104,18 @@ function normalizeReceivingRequestStatus(value: unknown): ReceivingRequestStatus
 function formatPersonName(firstName?: string, lastName?: string, fallback = 'Unknown User') {
   const fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
   return fullName || fallback;
+}
+
+function createReceivedBySnapshot(userProfile: ReturnType<typeof useAuth>['userProfile'], fallbackName: string) {
+  return {
+    receivedByUid: userProfile?.uid ?? '',
+    receivedByName: formatPersonName(
+      userProfile?.firstName,
+      userProfile?.lastName,
+      userProfile?.email ?? fallbackName
+    ),
+    receivedByEmail: userProfile?.email ?? 'unknown@cmg.local',
+  };
 }
 
 function createDispatchNumber() {
@@ -214,13 +219,29 @@ function normalizeBoolean(value: unknown) {
 
 function normalizeProjectNoText(value: unknown) {
   const text = normalizeText(value);
-  const projectMatch = text.match(/\bJ[-\s]?0*(\d+)\b/i);
+  const projectMatch = text.match(/\bJ[-\s]?0*([0-9]+[a-z0-9]*)\b/i);
 
   if (projectMatch) {
-    return `J${Number(projectMatch[1])}`;
+    return `J${projectMatch[1].toUpperCase()}`;
+  }
+
+  const plainProjectMatch = text.match(/\b0*([0-9]+[a-z0-9]*)\b/i);
+  if (plainProjectMatch) {
+    return `J${plainProjectMatch[1].toUpperCase()}`;
   }
 
   return text;
+}
+
+function normalizeCmgProjectCode(...values: unknown[]) {
+  for (const value of values) {
+    const normalized = normalizeProjectNoText(value);
+    if (normalized) {
+      return normalized;
+    }
+  }
+
+  return '';
 }
 
 function normalizeProjectNoFromRequest(data: DocumentData) {
@@ -288,6 +309,10 @@ function normalizeReceivingRequestItem(data: DocumentData, index: number): Recei
 }
 
 function normalizeReceivingRequest(data: DocumentData, fallbackId: string): ReceivingRequest {
+  const headerData =
+    data.header && typeof data.header === 'object'
+      ? (data.header as DocumentData)
+      : ({} as DocumentData);
   const items = parseReceivingItems(data.items)
     .map((item, index) => normalizeReceivingRequestItem(item as DocumentData, index))
     .filter((item) => item.receivedQty > 0);
@@ -297,36 +322,101 @@ function normalizeReceivingRequest(data: DocumentData, fallbackId: string): Rece
 
   return {
     id: normalizeText(data.id) || fallbackId,
-    documentNo: normalizeText(data.documentNo),
-    receiveNo: normalizeText(data.receiveNo ?? data.rpNo) || fallbackId,
-    poNo: normalizeText(data.poNo ?? data.documentNo),
-    prNo: normalizeText(data.prNo),
-    poType: normalizeText(data.poType ?? data.receiveType),
-    poId: normalizeText(data.poId),
-    projectId: normalizeText(data.projectId),
+    documentNo: normalizeText(data.documentNo ?? headerData.documentNo),
+    receiveNo: normalizeText(data.receiveNo ?? data.rpNo ?? headerData.receiveNo ?? headerData.rpNo) || fallbackId,
+    poNo: normalizeText(data.poNo ?? data.documentNo ?? headerData.poNo ?? headerData.documentNo),
+    prNo: normalizeText(data.prNo ?? headerData.prNo),
+    poType: normalizeText(data.poType ?? data.receiveType ?? headerData.poType ?? headerData.receiveType),
+    poId: normalizeText(data.poId ?? headerData.poId),
+    projectId: normalizeText(data.projectId ?? headerData.projectId),
+    cmgProjectCode: normalizeCmgProjectCode(
+      data.cmgProjectCode,
+      headerData.cmgProjectCode,
+      data.projectItemCode,
+      headerData.projectItemCode,
+      data.projectNo,
+      headerData.projectNo,
+      data.projectId,
+      headerData.projectId,
+    ),
     projectNo,
-    projectName: normalizeText(data.projectName) || normalizeProjectNoText(data.projectId) || projectNo,
-    projectItemCode: normalizeText(data.projectItemCode),
-    location: normalizeText(data.location),
-    vendorName: normalizeText(data.vendorName),
-    receiveName: normalizeText(data.receiveName ?? data.receivedByName),
-    receiveDate: normalizeDateText(data.receiveDate ?? data.receivedDate),
-    receivedByUid: normalizeText(data.receivedByUid),
-    receivedByName: normalizeText(data.receivedByName),
-    note: normalizeText(data.note),
-    sourceApp: normalizeText(data.sourceApp) || (normalizeBoolean(data.autoCreatedFromPoApproval) ? 'PO Approval' : ''),
-    externalDocId: normalizeText(data.externalDocId ?? data.poId ?? data.documentNo ?? data.rpNo ?? data.idempotencyKey),
+    projectName: normalizeText(data.projectName ?? headerData.projectName) || normalizeProjectNoText(data.projectId ?? headerData.projectId) || projectNo,
+    projectItemCode: normalizeText(data.projectItemCode ?? headerData.projectItemCode),
+    location: normalizeText(data.location ?? headerData.location),
+    vendorName: normalizeText(data.vendorName ?? headerData.vendorName),
+    receiveName: normalizeText(data.receiveName ?? data.receivedByName ?? headerData.receiveName ?? headerData.receivedByName),
+    receiveDate: normalizeDateText(data.receiveDate ?? data.receivedDate ?? headerData.receiveDate ?? headerData.receivedDate),
+    receivedByUid: normalizeText(data.receivedByUid ?? headerData.receivedByUid),
+    receivedByName: normalizeText(data.receivedByName ?? headerData.receivedByName),
+    note: normalizeText(data.note ?? headerData.note),
+    sourceApp: normalizeText(data.sourceApp ?? headerData.sourceApp) || (normalizeBoolean(data.autoCreatedFromPoApproval) ? 'PO Approval' : ''),
+    externalDocId: normalizeText(data.externalDocId ?? data.poId ?? data.documentNo ?? data.rpNo ?? data.idempotencyKey ?? headerData.poId ?? headerData.documentNo ?? headerData.rpNo ?? headerData.idempotencyKey),
     autoCreatedFromPoApproval: normalizeBoolean(data.autoCreatedFromPoApproval),
     requestStatus: normalizeReceivingRequestStatus(data.requestStatus ?? data.status),
     items,
     totalQty,
     totalAmount,
-    requestedAt: normalizeDateText(data.requestedAt) || normalizeDateText(data.createdAt) || new Date().toISOString(),
-    approvedAt: normalizeDateText(data.approvedAt),
-    approvedByUid: normalizeText(data.approvedByUid),
-    approvedByName: normalizeText(data.approvedByName),
-    approvedByEmail: normalizeText(data.approvedByEmail),
+    requestedAt: normalizeDateText(data.requestedAt ?? headerData.requestedAt) || normalizeDateText(data.createdAt ?? headerData.createdAt) || new Date().toISOString(),
+    approvedAt: normalizeDateText(data.approvedAt ?? headerData.approvedAt),
+    approvedByUid: normalizeText(data.approvedByUid ?? headerData.approvedByUid),
+    approvedByName: normalizeText(data.approvedByName ?? headerData.approvedByName),
+    approvedByEmail: normalizeText(data.approvedByEmail ?? headerData.approvedByEmail),
     stockReceiveNos: normalizeStringArray(data.stockReceiveNos),
+  };
+}
+
+function normalizeStockItem(data: DocumentData, fallbackId: string): StockItem {
+  return {
+    stockItemId: normalizeText(data.stockItemId) || fallbackId,
+    receiveNo: normalizeText(data.receiveNo ?? data.rpNo) || fallbackId,
+    poNo: normalizeText(data.poNo ?? data.documentNo),
+    prNo: normalizeText(data.prNo),
+    poType: normalizeText(data.poType ?? data.receiveType),
+    itemNo:
+      normalizeText(data.itemNo ?? data.materialNo ?? data.iditem ?? data.descriptionKey) ||
+      fallbackId,
+    itemDescription: normalizeText(data.itemDescription ?? data.description ?? data.itemName),
+    amount: normalizeNumber(data.amount),
+    qty: normalizeNumber(data.qty ?? data.QTY ?? data.quantity),
+    vendorName: normalizeText(data.vendorName),
+    location: normalizeText(data.location),
+    purchasedForProject: normalizeText(data.purchasedForProject ?? data.projectName),
+    receiveName: normalizeText(data.receiveName ?? data.receivedByName),
+    receiveDate: normalizeDateText(data.receiveDate ?? data.receivedDate ?? data.lastReceivedAt),
+    status: (normalizeText(data.status) as StockItem['status']) || 'Pending Dispatch',
+    sourceApp: normalizeText(data.sourceApp),
+    sourceReceiveNo: normalizeText(data.sourceReceiveNo),
+    rpNo: normalizeText(data.rpNo),
+    receiveType: normalizeText(data.receiveType),
+    iditem: normalizeText(data.iditem),
+    materialNo: normalizeText(data.materialNo),
+    unit: normalizeText(data.unit),
+    poItemIndex: data.poItemIndex,
+    orderedQty:
+      data.orderedQty === undefined || data.orderedQty === null
+        ? undefined
+        : normalizeNumber(data.orderedQty),
+    unitPrice:
+      data.unitPrice === undefined || data.unitPrice === null
+        ? undefined
+        : normalizeNumber(data.unitPrice),
+    projectId: normalizeText(data.projectId),
+    vendorId: normalizeText(data.vendorId),
+    documentNo: normalizeText(data.documentNo),
+    poId:
+      data.poId === undefined || data.poId === null
+        ? undefined
+        : String(data.poId).trim(),
+    receivedByUid: normalizeText(data.receivedByUid),
+    receivedByName: normalizeText(data.receivedByName),
+    receivedByEmail: normalizeText(data.receivedByEmail),
+    note: normalizeText(data.note),
+    lastReceiveEventId: normalizeText(data.lastReceiveEventId),
+    lastReceivedQty:
+      data.lastReceivedQty === undefined || data.lastReceivedQty === null
+        ? undefined
+        : normalizeNumber(data.lastReceivedQty),
+    lastReceivedAt: normalizeDateText(data.lastReceivedAt),
   };
 }
 
@@ -421,167 +511,110 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     let unsubDispatch = () => {};
     let unsubReceivingRequests = () => {};
 
-    async function initializeDatabase() {
-      try {
-        const projectsCol = collection(db, APP_NAME, 'root', 'projects');
-        const stockCol = collection(db, APP_NAME, 'root', 'stockItems');
-        const dispatchCol = collection(db, APP_NAME, 'root', 'dispatchRecords');
-        const receivingRequestsCol = collection(db, APP_NAME, 'root', 'receivingRequests');
-
-        const [projectsSnapshot, stockSnapshot, dispatchSnapshot, receivingRequestsSnapshot] = await Promise.all([
-          getDocs(projectsCol),
-          getDocs(stockCol),
-          getDocs(dispatchCol),
-          getDocs(receivingRequestsCol),
-        ]);
-
-        if (projectsSnapshot.empty && stockSnapshot.empty) {
-          const batch = writeBatch(db);
-
-          mockProjects.forEach((proj) => {
-            const docRef = doc(db, APP_NAME, 'root', 'projects', proj.projectNo);
-            batch.set(docRef, proj);
-          });
-
-          mockStockItems.forEach((item) => {
-            const docRef = doc(db, APP_NAME, 'root', 'stockItems', item.receiveNo);
-            batch.set(docRef, item);
-          });
-
-          await batch.commit();
-        }
-
-        if (dispatchSnapshot.empty) {
-          const batch = writeBatch(db);
-          mockDispatchRecords.forEach((record) => {
-            const docRef = doc(db, APP_NAME, 'root', 'dispatchRecords', record.id);
-            batch.set(docRef, record);
-          });
-          await batch.commit();
-        }
-
-        if (receivingRequestsSnapshot.empty) {
-          const batch = writeBatch(db);
-          mockReceivingRequests.forEach((request) => {
-            const docRef = doc(db, APP_NAME, 'root', 'receivingRequests', request.id);
-            batch.set(docRef, request);
-          });
-          await batch.commit();
-        }
-      } catch (error) {
-        console.error('Failed to query or seed Firestore databases on init:', error);
+    const projectsColRef = collection(db, APP_NAME, 'root', 'projects');
+    unsubProjects = onSnapshot(
+      projectsColRef,
+      (snapshot) => {
+        const loadedProjects = snapshot.docs
+          .map((projectDoc) => normalizeLocalProject(projectDoc.data() as Partial<Project>, projectDoc.id))
+          .filter((project): project is Project => project !== null);
+        loadedProjects.sort((a, b) => a.projectNo.localeCompare(b.projectNo));
+        setLocalProjects(loadedProjects);
+      },
+      (error) => {
+        console.error('Failed to listen to projects updates:', error);
+        setLocalProjects([]);
       }
+    );
 
-      const projectsColRef = collection(db, APP_NAME, 'root', 'projects');
-      unsubProjects = onSnapshot(
-        projectsColRef,
-        (snapshot) => {
-          const loadedProjects = snapshot.docs
-            .map((projectDoc) => normalizeLocalProject(projectDoc.data() as Partial<Project>, projectDoc.id))
-            .filter((project): project is Project => project !== null);
-          loadedProjects.sort((a, b) => a.projectNo.localeCompare(b.projectNo));
-          setLocalProjects(loadedProjects);
-        },
-        (error) => {
-          console.error('Failed to listen to projects updates:', error);
-          setLocalProjects(mockProjects.map((project) => ({ ...project, source: 'local' })));
-        }
-      );
+    if (masterDataDb && masterDataProjectsPath) {
+      const sanitizedPath = masterDataProjectsPath.replace(/^\/+|\/+$/g, '');
+      const pathSegments = sanitizedPath.split('/').filter(Boolean);
 
-      if (masterDataDb && masterDataProjectsPath) {
-        const sanitizedPath = masterDataProjectsPath.replace(/^\/+|\/+$/g, '');
-        const pathSegments = sanitizedPath.split('/').filter(Boolean);
-
-        if (pathSegments.length % 2 === 1) {
-          const masterProjectsColRef = collection(masterDataDb, sanitizedPath);
-          unsubMasterProjects = onSnapshot(
-            masterProjectsColRef,
-            (snapshot) => {
-              const loadedProjects = snapshot.docs
-                .map((projectDoc) => normalizeMasterProject(projectDoc.data() as MasterDataProject, projectDoc.id))
-                .filter((project): project is Project => project !== null);
-              loadedProjects.sort((a, b) => a.projectNo.localeCompare(b.projectNo));
-              setMasterProjects(loadedProjects);
-            },
-            (error) => {
-              console.error('Failed to listen to MasterData project updates:', error);
-              setMasterProjects([]);
-            }
-          );
-        } else {
-          console.error('Invalid MasterData projects path. Expected a Firestore collection path:', masterDataProjectsPath);
-          setMasterProjects([]);
-        }
+      if (pathSegments.length % 2 === 1) {
+        const masterProjectsColRef = collection(masterDataDb, sanitizedPath);
+        unsubMasterProjects = onSnapshot(
+          masterProjectsColRef,
+          (snapshot) => {
+            const loadedProjects = snapshot.docs
+              .map((projectDoc) => normalizeMasterProject(projectDoc.data() as MasterDataProject, projectDoc.id))
+              .filter((project): project is Project => project !== null);
+            loadedProjects.sort((a, b) => a.projectNo.localeCompare(b.projectNo));
+            setMasterProjects(loadedProjects);
+          },
+          (error) => {
+            console.error('Failed to listen to MasterData project updates:', error);
+            setMasterProjects([]);
+          }
+        );
       } else {
+        console.error('Invalid MasterData projects path. Expected a Firestore collection path:', masterDataProjectsPath);
         setMasterProjects([]);
       }
-
-      const projectStatusesColRef = collection(db, APP_NAME, 'root', 'projectStatuses');
-      unsubProjectStatuses = onSnapshot(
-        projectStatusesColRef,
-        (snapshot) => {
-          const loadedStatuses = snapshot.docs.reduce<Record<string, ProjectStatus>>((acc, statusDoc) => {
-            const data = statusDoc.data() as DocumentData;
-            acc[statusDoc.id] = normalizeProjectStatus(data.status);
-            return acc;
-          }, {} as Record<string, ProjectStatus>);
-          setProjectStatuses(loadedStatuses);
-        },
-        (error) => {
-          console.error('Failed to listen to project status updates:', error);
-          setProjectStatuses({});
-        }
-      );
-
-      const stockColRef = collection(db, APP_NAME, 'root', 'stockItems');
-      unsubStock = onSnapshot(
-        stockColRef,
-        (snapshot) => {
-          const loadedItems = snapshot.docs.map((d) => ({
-            ...(d.data() as StockItem),
-            stockItemId: d.id,
-          }));
-          loadedItems.sort((a, b) => b.receiveNo.localeCompare(a.receiveNo));
-          setItems(loadedItems);
-          setLoading(false);
-        },
-        (error) => {
-          console.error('Failed to listen to stockItems updates:', error);
-          setItems(mockStockItems);
-          setLoading(false);
-        }
-      );
-
-      const dispatchColRef = collection(db, APP_NAME, 'root', 'dispatchRecords');
-      unsubDispatch = onSnapshot(
-        dispatchColRef,
-        (snapshot) => {
-          const loadedRecords = snapshot.docs.map((d) => d.data() as DispatchRecord);
-          loadedRecords.sort((a, b) => b.dispatchedAt.localeCompare(a.dispatchedAt));
-          setDispatchList(loadedRecords);
-        },
-        (error) => {
-          console.error('Failed to listen to dispatch updates:', error);
-          setDispatchList(mockDispatchRecords);
-        }
-      );
-
-      const receivingRequestsColRef = collection(db, APP_NAME, 'root', 'receivingRequests');
-      unsubReceivingRequests = onSnapshot(
-        receivingRequestsColRef,
-        (snapshot) => {
-          const loadedRequests = snapshot.docs.map((d) => normalizeReceivingRequest(d.data(), d.id));
-          loadedRequests.sort((a, b) => b.requestedAt.localeCompare(a.requestedAt));
-          setReceivingRequestList(loadedRequests);
-        },
-        (error) => {
-          console.error('Failed to listen to receiving request updates:', error);
-          setReceivingRequestList(mockReceivingRequests);
-        }
-      );
+    } else {
+      setMasterProjects([]);
     }
 
-    initializeDatabase();
+    const projectStatusesColRef = collection(db, APP_NAME, 'root', 'projectStatuses');
+    unsubProjectStatuses = onSnapshot(
+      projectStatusesColRef,
+      (snapshot) => {
+        const loadedStatuses = snapshot.docs.reduce<Record<string, ProjectStatus>>((acc, statusDoc) => {
+          const data = statusDoc.data() as DocumentData;
+          acc[statusDoc.id] = normalizeProjectStatus(data.status);
+          return acc;
+        }, {} as Record<string, ProjectStatus>);
+        setProjectStatuses(loadedStatuses);
+      },
+      (error) => {
+        console.error('Failed to listen to project status updates:', error);
+        setProjectStatuses({});
+      }
+    );
+
+    const stockColRef = collection(db, APP_NAME, 'root', 'stockItems');
+    unsubStock = onSnapshot(
+      stockColRef,
+      (snapshot) => {
+        const loadedItems = snapshot.docs.map((d) => normalizeStockItem(d.data(), d.id));
+        loadedItems.sort((a, b) => b.receiveNo.localeCompare(a.receiveNo));
+        setItems(loadedItems);
+        setLoading(false);
+      },
+      (error) => {
+        console.error('Failed to listen to stockItems updates:', error);
+        setItems([]);
+        setLoading(false);
+      }
+    );
+
+    const dispatchColRef = collection(db, APP_NAME, 'root', 'dispatchRecords');
+    unsubDispatch = onSnapshot(
+      dispatchColRef,
+      (snapshot) => {
+        const loadedRecords = snapshot.docs.map((d) => d.data() as DispatchRecord);
+        loadedRecords.sort((a, b) => b.dispatchedAt.localeCompare(a.dispatchedAt));
+        setDispatchList(loadedRecords);
+      },
+      (error) => {
+        console.error('Failed to listen to dispatch updates:', error);
+        setDispatchList([]);
+      }
+    );
+
+    const receivingRequestsColRef = collection(db, APP_NAME, 'root', 'receivingRequests');
+    unsubReceivingRequests = onSnapshot(
+      receivingRequestsColRef,
+      (snapshot) => {
+        const loadedRequests = snapshot.docs.map((d) => normalizeReceivingRequest(d.data(), d.id));
+        loadedRequests.sort((a, b) => b.requestedAt.localeCompare(a.requestedAt));
+        setReceivingRequestList(loadedRequests);
+      },
+      (error) => {
+        console.error('Failed to listen to receiving request updates:', error);
+        setReceivingRequestList([]);
+      }
+    );
 
     return () => {
       unsubProjects();
@@ -763,6 +796,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
           status: 'In Transit',
           location: createTransitLocation(projectNo),
           purchasedForProject: createProjectLabel(projectNo),
+          cmgProjectCode: projectNo,
         });
         return;
       }
@@ -785,6 +819,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         amount: dispatchedAmount,
         location: createTransitLocation(projectNo),
         purchasedForProject: createProjectLabel(projectNo),
+        cmgProjectCode: projectNo,
         status: 'In Transit',
       };
 
@@ -809,6 +844,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       userProfile?.email ?? 'Site Receiver'
     );
     const receivedByEmail = userProfile?.email ?? 'unknown@cmg.local';
+    const receivedByUid = userProfile?.uid ?? '';
 
     const batch = writeBatch(db);
     target.itemReceiveNos.forEach((receiveNo) => {
@@ -817,6 +853,11 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         status: 'Received at Site',
         location: createProjectStoreLocation(target.destinationProjectNo),
         purchasedForProject: createProjectLabel(target.destinationProjectNo),
+        receiveName: receivedByName,
+        receivedByUid,
+        receivedByName,
+        receivedByEmail,
+        lastReceivedAt: receivedAt,
       });
     });
 
@@ -840,6 +881,12 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     }
 
     const projectNo = target.projectNo || extractProjectNo(target.projectName);
+    const cmgProjectCode = normalizeCmgProjectCode(
+      target.cmgProjectCode,
+      target.projectItemCode,
+      target.projectNo,
+      target.projectId,
+    );
     const location = target.location || (projectNo ? createProjectStoreLocation(projectNo) : 'Store Center');
     const stockStatus: StockItem['status'] = location === 'Store Center' ? 'Pending Dispatch' : 'Received at Site';
     const approvedAt = new Date().toISOString();
@@ -849,6 +896,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       userProfile?.email ?? 'Store Receiver'
     );
     const approvedByEmail = userProfile?.email ?? 'unknown@cmg.local';
+    const approvedByUid = userProfile?.uid ?? '';
     const stockReceiveNos = target.items.map((item, index) => createReceivingStockReceiveNo(target, item, index));
 
     const batch = writeBatch(db);
@@ -868,8 +916,13 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         vendorName: target.vendorName,
         location,
         purchasedForProject: projectNo ? createProjectLabel(projectNo) : target.projectName,
+        cmgProjectCode,
         receiveName: target.receiveName || approvedByName,
         receiveDate: target.receiveDate,
+        receivedByUid: approvedByUid,
+        receivedByName: approvedByName,
+        receivedByEmail: approvedByEmail,
+        lastReceivedAt: approvedAt,
         status: stockStatus,
       };
 
@@ -882,7 +935,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       {
         requestStatus: 'approved',
         approvedAt,
-        approvedByUid: userProfile?.uid ?? '',
+        approvedByUid,
         approvedByName,
         approvedByEmail,
         stockReceiveNos,
@@ -908,25 +961,37 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     if (!target) return;
 
     const projectNo = extractProjectNo(target.purchasedForProject);
+    const receiver = createReceivedBySnapshot(userProfile, 'Site Receiver');
 
     await setDoc(
       docRef,
       {
         status: 'Received at Site',
         location: projectNo ? createProjectStoreLocation(projectNo) : target.location,
+        receiveName: receiver.receivedByName,
+        receivedByUid: receiver.receivedByUid,
+        receivedByName: receiver.receivedByName,
+        receivedByEmail: receiver.receivedByEmail,
+        lastReceivedAt: new Date().toISOString(),
       },
       { merge: true }
     );
-  }, [dispatchList, items, receiveDispatch]);
+  }, [dispatchList, items, receiveDispatch, userProfile]);
 
   const receiveNewItem = useCallback(async (item: StockItem) => {
     const stockItemId = getStockItemId(item);
     const docRef = doc(db, APP_NAME, 'root', 'stockItems', stockItemId);
+    const receiver = createReceivedBySnapshot(userProfile, 'Store Receiver');
     await setDoc(docRef, {
       ...item,
       stockItemId,
+      receiveName: item.receiveName || receiver.receivedByName,
+      receivedByUid: item.receivedByUid || receiver.receivedByUid,
+      receivedByName: item.receivedByName || receiver.receivedByName,
+      receivedByEmail: item.receivedByEmail || receiver.receivedByEmail,
+      lastReceivedAt: item.lastReceivedAt || item.receiveDate || new Date().toISOString(),
     });
-  }, []);
+  }, [userProfile]);
 
   const receivePrPoPayload = useCallback(async (payload: PrPoReceivePayload) => {
     return processPrPoReceivePayload(payload);

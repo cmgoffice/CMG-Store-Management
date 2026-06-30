@@ -45,6 +45,55 @@
   color: #c50f1f;
 }
 
+.expandableRow {
+  cursor: pointer;
+}
+
+.expandButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+}
+
+.detailRow td {
+  background: #fbfcff;
+  padding: 0;
+}
+
+.detailPanel {
+  padding: 10px 14px 14px;
+}
+
+.detailTable {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.detailTable th,
+.detailTable td {
+  padding: 8px 10px;
+  border-top: 1px solid #e8ecf5;
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
+.detailTable th {
+  color: #686276;
+  font-weight: 600;
+  text-align: left;
+}
+
+.detailTable td {
+  color: var(--color-text);
+}
+
 @media (max-width: 720px) {
   .select,
   .primaryButton {

@@ -96,6 +96,12 @@ function makeProjectLabel(projectId: string) {
   return projectId ? `Project ${projectId}` : 'Project';
 }
 
+function normalizeProjectCode(value: unknown) {
+  const text = readString(value);
+  const projectMatch = text.match(/\bJ[-\s]?0*(\d+)\b/i);
+  return projectMatch ? `J${Number(projectMatch[1])}` : text;
+}
+
 function normalizeReceiveType(receiveType: unknown) {
   return readString(receiveType).toLowerCase();
 }
@@ -213,6 +219,7 @@ function getStockItemForCreate(
   const receiveType = readString(payload.receiveType);
   const projectId = readString(payload.projectId);
   const receiveNo = getPayloadReceiveNo(payload);
+  const cmgProjectCode = normalizeProjectCode(payload.cmgProjectCode) || normalizeProjectCode(projectId);
 
   return stripUndefined({
     stockItemId: normalizedItem.stockItemId,
@@ -241,6 +248,7 @@ function getStockItemForCreate(
     orderedQty: normalizedItem.orderedQty,
     unitPrice: normalizedItem.unitPrice,
     projectId,
+    cmgProjectCode: cmgProjectCode || undefined,
     vendorId: readString(payload.vendorId) || undefined,
     documentNo: readString(payload.documentNo) || undefined,
     poId: readString(payload.poId) || undefined,
@@ -283,6 +291,7 @@ async function upsertReceiveItem(
   const receiveNo = getPayloadReceiveNo(payload);
   const receiveDate = getPayloadDate(payload);
   const receiveType = readString(payload.receiveType);
+  const cmgProjectCode = normalizeProjectCode(payload.cmgProjectCode) || normalizeProjectCode(projectId);
 
   return runTransaction(db, async (transaction) => {
     const eventSnapshot = await transaction.get(eventRef);
@@ -330,6 +339,7 @@ async function upsertReceiveItem(
         orderedQty: normalizedItem.orderedQty ?? null,
         unitPrice: normalizedItem.unitPrice ?? null,
         projectId,
+        cmgProjectCode: cmgProjectCode || null,
         sourceApp: readString(payload.sourceApp) || SOURCE_APP,
         lastReceiveEventId: normalizedItem.eventId,
         lastReceivedQty: normalizedItem.receivedQty,
@@ -359,6 +369,7 @@ async function upsertReceiveItem(
       poNo: readString(payload.poNo),
       prNo: readString(payload.prNo),
       projectId,
+      cmgProjectCode: cmgProjectCode || undefined,
       vendorId: readString(payload.vendorId),
       vendorName: readString(payload.vendorName),
       documentNo: readString(payload.documentNo),

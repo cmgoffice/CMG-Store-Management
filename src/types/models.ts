@@ -56,10 +56,13 @@ export interface StockItem {
   orderedQty?: number;
   unitPrice?: number;
   projectId?: string;
+  cmgProjectCode?: string;
   vendorId?: string;
   documentNo?: string;
   poId?: string | number;
   receivedByUid?: string;
+  receivedByName?: string;
+  receivedByEmail?: string;
   note?: string;
   lastReceiveEventId?: string;
   lastReceivedQty?: number;
@@ -88,6 +91,7 @@ export interface ReceivingRequest {
   poType: string;
   poId?: string;
   projectId?: string;
+  cmgProjectCode?: string;
   projectNo: string;
   projectName: string;
   projectItemCode?: string;
@@ -204,6 +208,7 @@ export interface PrPoReceivePayload {
   poNo?: string;
   prNo?: string;
   projectId?: string | number;
+  cmgProjectCode?: string;
   vendorId?: string | number;
   vendorName?: string;
   documentNo?: string;
