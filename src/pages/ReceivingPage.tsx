@@ -5,8 +5,7 @@ import { SearchField } from '../components/SearchField';
 import { StatusBadge } from '../components/StatusBadge';
 import { useInventory } from '../context/InventoryContext';
 import { useRole } from '../context/RoleContext';
-import type { ReceivingRequest, StockItem } from '../types/models';
-import { getStockItemId } from '../utils/stockItem';
+import type { DispatchRecord, ReceivingRequest } from '../types/models';
 import '../styles/tables.css';
 import styles from './ReceivingPage.module.css';
 
@@ -32,6 +31,10 @@ function formatAmount(value: number) {
   return value.toLocaleString('en-US', {
     maximumFractionDigits: 2,
   });
+}
+
+function formatBadgeCount(count: number) {
+  return count > 99 ? '99+' : String(count);
 }
 
 function joinItemDescriptions(items: ReceivingRequest['items']) {
@@ -70,13 +73,8 @@ function getRequestProjectCode(request: ReceivingRequest) {
   );
 }
 
-function getStockItemProjectCode(item: StockItem) {
-  return normalizeProjectNoText(
-    item.cmgProjectCode ||
-      item.projectId ||
-      item.purchasedForProject ||
-      item.location,
-  );
+function getDispatchDestinationProjectCode(record: DispatchRecord) {
+  return normalizeProjectNoText(record.destinationProjectNo || record.destinationProjectName);
 }
 
 function createProjectGroups<T>(items: T[], getProjectCode: (item: T) => string) {
@@ -110,17 +108,17 @@ export function ReceivingPage() {
   const {
     projects,
     activeProjects,
-    stockItems,
     receivingRequests,
-    approveReceipt,
+    dispatchRecords,
     approveReceivingRequest,
+    receiveDispatch,
     activeProjectNo,
   } = useInventory();
   const { canApproveReceipt } = useRole();
   const [activeTab, setActiveTab] = useState<ReceivingTab>('receive');
   const [query, setQuery] = useState('');
   const [approvingRequestId, setApprovingRequestId] = useState<string | null>(null);
-  const [approvingIncomingItemId, setApprovingIncomingItemId] = useState<string | null>(null);
+  const [approvingIncomingDispatchId, setApprovingIncomingDispatchId] = useState<string | null>(null);
 
   const activeProject = activeProjects.find((project) => project.projectNo === activeProjectNo)
     ?? projects.find((project) => project.projectNo === activeProjectNo);
@@ -169,42 +167,59 @@ export function ReceivingPage() {
     () => filteredRequests.filter((request) => request.requestStatus === 'approved'),
     [filteredRequests],
   );
-  const incomingItems = useMemo(() => {
-    return stockItems.filter((item) => {
-      const cmgProjectCode = getStockItemProjectCode(item);
+  const pendingRequestsBadgeCount = useMemo(() => {
+    return receivingRequests.filter((request) => {
+      const cmgProjectCode = getRequestProjectCode(request);
+      return (
+        request.requestStatus === 'pending' &&
+        (!normalizedActiveProjectNo || cmgProjectCode === normalizedActiveProjectNo)
+      );
+    }).length;
+  }, [normalizedActiveProjectNo, receivingRequests]);
+  const incomingDispatches = useMemo(() => {
+    return dispatchRecords.filter((record) => {
+      const cmgProjectCode = getDispatchDestinationProjectCode(record);
       const isForActiveProject =
         !normalizedActiveProjectNo ||
         cmgProjectCode === normalizedActiveProjectNo;
       const matchesQuery =
         !normalizedQuery ||
         [
-          item.receiveNo,
-          item.prNo,
-          item.poNo,
-          item.itemNo,
-          item.itemDescription,
-          item.vendorName,
-          item.purchasedForProject,
-          item.location,
-          item.cmgProjectCode,
-          item.projectId,
+          record.dispatchNo,
+          record.sourceProjectNo,
+          record.sourceProjectName,
+          record.destinationProjectNo,
+          record.destinationProjectName,
+          record.transport,
+          record.note,
+          record.dispatchedByName,
           cmgProjectCode,
+          ...record.items.map((item) => `${item.receiveNo} ${item.prNo} ${item.poNo} ${item.itemNo} ${item.itemDescription} ${item.vendorName}`),
         ]
           .join(' ')
           .toLowerCase()
           .includes(normalizedQuery);
 
-      return item.status === 'In Transit' && isForActiveProject && matchesQuery;
+      return record.status === 'Pending Receipt' && isForActiveProject && matchesQuery;
     });
-  }, [normalizedActiveProjectNo, normalizedQuery, stockItems]);
+  }, [dispatchRecords, normalizedActiveProjectNo, normalizedQuery]);
+  const incomingDispatchesBadgeCount = useMemo(() => {
+    return dispatchRecords.filter((record) => {
+      const cmgProjectCode = getDispatchDestinationProjectCode(record);
+      return (
+        record.status === 'Pending Receipt' &&
+        (!normalizedActiveProjectNo || cmgProjectCode === normalizedActiveProjectNo)
+      );
+    }).length;
+  }, [dispatchRecords, normalizedActiveProjectNo]);
 
   const pendingRequestGroups = useMemo(
     () => createProjectGroups(pendingRequests, getRequestProjectCode),
     [pendingRequests],
   );
-  const incomingItemGroups = useMemo(
-    () => createProjectGroups(incomingItems, getStockItemProjectCode),
-    [incomingItems],
+  const incomingDispatchGroups = useMemo(
+    () => createProjectGroups(incomingDispatches, getDispatchDestinationProjectCode),
+    [incomingDispatches],
   );
   const approvedRequestGroups = useMemo(
     () => createProjectGroups(approvedRequests, getRequestProjectCode),
@@ -223,15 +238,15 @@ export function ReceivingPage() {
     }
   };
 
-  const handleApproveIncoming = async (stockItemId: string) => {
-    if (approvingIncomingItemId) return;
-    setApprovingIncomingItemId(stockItemId);
+  const handleApproveIncoming = async (dispatchId: string) => {
+    if (approvingIncomingDispatchId) return;
+    setApprovingIncomingDispatchId(dispatchId);
     try {
-      await approveReceipt(stockItemId);
+      await receiveDispatch(dispatchId);
     } catch (error) {
-      console.error('Failed to approve incoming item:', error);
+      console.error('Failed to receive incoming dispatch:', error);
     } finally {
-      setApprovingIncomingItemId(null);
+      setApprovingIncomingDispatchId(null);
     }
   };
 
@@ -264,21 +279,27 @@ export function ReceivingPage() {
           className={`${styles.tabButton} ${activeTab === 'receive' ? styles.tabButtonActive : ''}`}
           onClick={() => setActiveTab('receive')}
         >
-          Receive
+          <span>รับเข้าใหม่</span>
+          {pendingRequestsBadgeCount > 0 ? (
+            <span className={styles.tabBadge}>{formatBadgeCount(pendingRequestsBadgeCount)}</span>
+          ) : null}
         </button>
         <button
           type="button"
           className={`${styles.tabButton} ${activeTab === 'incoming' ? styles.tabButtonActive : ''}`}
           onClick={() => setActiveTab('incoming')}
         >
-          Incoming Items
+          <span>ย้ายโครงการ</span>
+          {incomingDispatchesBadgeCount > 0 ? (
+            <span className={styles.tabBadge}>{formatBadgeCount(incomingDispatchesBadgeCount)}</span>
+          ) : null}
         </button>
         <button
           type="button"
           className={`${styles.tabButton} ${activeTab === 'log' ? styles.tabButtonActive : ''}`}
           onClick={() => setActiveTab('log')}
         >
-          Log Receive
+          ประวัติการเข้า-ออก
         </button>
       </div>
 
@@ -404,72 +425,108 @@ export function ReceivingPage() {
         <section className={styles.panel}>
           <div className={styles.sectionHeader}>
             <div>
-              <h2>Approve Incoming Items</h2>
-              <p>In-transit items are grouped by CMG project code before site receipt is confirmed.</p>
+              <h2>Pending Project Transfers</h2>
+              <p>Dispatch requests sent to the active project are waiting here before they are received into the project store.</p>
             </div>
             <div className={styles.selectionNote}>Active: {activeProject?.projectNo ?? '-'}</div>
           </div>
 
-          {incomingItemGroups.length === 0 ? (
-            <div className={styles.empty}>No incoming in-transit items matched the current filters.</div>
-          ) : incomingItemGroups.map((group) => (
+          {incomingDispatchGroups.length === 0 ? (
+            <div className={styles.empty}>No pending project transfer requests matched the current filters.</div>
+          ) : incomingDispatchGroups.map((group) => (
             <section key={group.projectCode} className={styles.projectGroup}>
               <div className={styles.projectGroupHeader}>
                 <div>
-                  <div className={styles.projectCodeBadge}>CMG Project Code: {group.projectCode}</div>
+                  <div className={styles.projectCodeBadge}>Destination Project: {group.projectCode}</div>
                   <div className={styles.groupMeta}>
-                    {group.items.length} item(s) / {group.items.reduce((sum, item) => sum + item.qty, 0).toLocaleString()} qty
+                    {group.items.length} request(s) / {group.items.reduce((sum, record) => sum + record.totalQty, 0).toLocaleString()} qty
                   </div>
                 </div>
               </div>
 
               <div className="tableScroll">
-                  <table className={`table compact ${styles.receivingTable}`}>
+                <table className={`table compact ${styles.receivingTable} ${styles.dispatchTable}`}>
                   <thead>
                     <tr>
-                      <th>Date-Sequence</th>
-                      <th>PR No.</th>
-                      <th>Purchased For Project</th>
-                      <th>Current Location</th>
-                      <th>Vendor Name</th>
-                      <th>Description</th>
+                      <th>Dispatch No.</th>
+                      <th>Route</th>
+                      <th>Dispatched At</th>
+                      <th>Vehicle Plate</th>
+                      <th>Items</th>
+                      <th>Attachment</th>
+                      <th>Sent By</th>
                       <th>Status</th>
                       <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {group.items.map((item) => {
-                      const stockItemId = getStockItemId(item);
-
-                      return (
-                        <tr key={stockItemId}>
-                          <td>{item.receiveDate}</td>
-                          <td>{item.prNo}</td>
-                          <td>{item.purchasedForProject}</td>
-                          <td>{item.location}</td>
-                          <td>{item.vendorName}</td>
-                          <td className={styles.descriptionCell}>{item.itemDescription || '-'}</td>
-                          <td>
-                            <StatusBadge status={item.status} />
-                          </td>
-                          <td>
-                            <button
-                              className={styles.approveButton}
-                              type="button"
-                              disabled={!canApproveReceipt || approvingIncomingItemId !== null}
-                              onClick={() => handleApproveIncoming(stockItemId)}
-                            >
-                              {approvingIncomingItemId === stockItemId ? (
-                                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                              ) : (
-                                <CheckCircle2 size={16} />
-                              )}
-                              <span>{approvingIncomingItemId === stockItemId ? 'Approving...' : 'Approve Receipt'}</span>
-                            </button>
-                          </td>
-                        </tr>
-                      );
-                    })}
+                    {group.items.map((record) => (
+                      <tr key={record.id}>
+                        <td>
+                          <span className={styles.receiveCode}>{record.dispatchNo}</span>
+                        </td>
+                        <td>
+                          <div className={styles.routeCell}>
+                            <strong>
+                              {record.sourceProjectNo || '-'} to {record.destinationProjectNo}
+                            </strong>
+                            <span>
+                              {record.sourceProjectName || 'Unknown source project'} to {record.destinationProjectName}
+                            </span>
+                          </div>
+                        </td>
+                        <td>{formatDateTime(record.dispatchedAt)}</td>
+                        <td>{record.transport || '-'}</td>
+                        <td>
+                          <div className={styles.itemStack}>
+                            {record.items.map((item) => (
+                              <span key={`${record.id}-${item.stockReceiveNo}`} className={styles.itemChip}>
+                                {item.receiveNo} / {item.itemDescription} / Qty {item.qty}
+                              </span>
+                            ))}
+                            {record.note ? <span className={styles.noteText}>Note: {record.note}</span> : null}
+                          </div>
+                        </td>
+                        <td>
+                          {record.photoUrls.length > 0 ? (
+                            <div className={styles.photoList}>
+                              {record.photoUrls.map((url, index) => (
+                                <a
+                                  key={`${record.id}-${index}`}
+                                  href={url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className={styles.photoLink}
+                                >
+                                  Photo {index + 1}
+                                </a>
+                              ))}
+                            </div>
+                          ) : (
+                            <span className={styles.noteText}>No photo</span>
+                          )}
+                        </td>
+                        <td>{record.dispatchedByName}</td>
+                        <td>
+                          <StatusBadge status={record.status} />
+                        </td>
+                        <td>
+                          <button
+                            className={styles.approveButton}
+                            type="button"
+                            disabled={!canApproveReceipt || approvingIncomingDispatchId !== null}
+                            onClick={() => handleApproveIncoming(record.id)}
+                          >
+                            {approvingIncomingDispatchId === record.id ? (
+                              <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                              <CheckCircle2 size={16} />
+                            )}
+                            <span>{approvingIncomingDispatchId === record.id ? 'Receiving...' : 'Receive into Project'}</span>
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
               </div>
@@ -498,7 +555,7 @@ export function ReceivingPage() {
               </div>
 
               <div className="tableScroll">
-                <table className={`table compact ${styles.receivingTable}`}>
+                <table className={`table compact ${styles.receivingTable} ${styles.historyTable}`}>
                   <thead>
                     <tr>
                       <th>No.</th>
@@ -520,7 +577,9 @@ export function ReceivingPage() {
                           <span className={styles.receiveCode}>{request.id}</span>
                         </td>
                         <td>{request.prNo || '-'}</td>
-                        <td className={styles.descriptionCell}>{joinItemDescriptions(request.items)}</td>
+                        <td className={`${styles.descriptionCell} ${styles.historyDescriptionCell}`}>
+                          {joinItemDescriptions(request.items)}
+                        </td>
                         <td>{request.receiveName || '-'}</td>
                         <td>{request.approvedByName || '-'}</td>
                         <td>{formatDateTime(request.approvedAt)}</td>

@@ -2,7 +2,10 @@
 .secondaryButton,
 .ghostButton,
 .iconButton,
+.selectItemsButton,
+.removeItemButton,
 .tabButton,
+.checkbox,
 .select,
 .input,
 .textarea {
@@ -257,6 +260,25 @@
   text-align: center;
 }
 
+.emptyInline,
+.dispatchPickerEmpty {
+  border: 1px dashed #cdd8e8;
+  border-radius: 14px;
+  background: #f8fbff;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  padding: 12px 14px;
+}
+
+.dispatchPickerEmpty {
+  border: 0;
+  border-top: 1px solid #edf3fb;
+  border-radius: 0;
+  text-align: center;
+}
+
 .modalOverlay {
   position: fixed;
   inset: 0;
@@ -319,6 +341,17 @@
   background: #f9fbff;
 }
 
+.footerError {
+  border-top: 1px solid #fee2e2;
+  background: #fff5f5;
+  color: #b91c1c;
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 18px;
+  padding: 10px 24px 14px;
+  text-align: right;
+}
+
 .formGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -328,6 +361,14 @@
 .field {
   display: grid;
   gap: 8px;
+}
+
+.fieldHeader,
+.pickerToolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .field span {
@@ -393,6 +434,118 @@
   border: 1px solid #dbe6f5;
   border-radius: 20px;
   background: #fff;
+}
+
+.selectItemsButton {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid #b9cbe2;
+  border-radius: 12px;
+  background: #fff;
+  color: #0b5cad;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 0 12px;
+}
+
+.selectedItemsTable {
+  overflow: hidden;
+  border: 1px solid #dbe6f5;
+  border-radius: 18px;
+  background: #fff;
+}
+
+.selectedItemsHead,
+.selectedItemRow {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) 110px 120px 64px;
+  gap: 12px;
+  align-items: center;
+}
+
+.selectedItemsHead {
+  padding: 12px 16px;
+  background: #f5f9ff;
+  color: #36516d;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.selectedItemsBody {
+  display: grid;
+}
+
+.selectedItemRow {
+  padding: 12px 16px;
+  border-top: 1px solid #edf3fb;
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.selectedItemRow small {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.removeItemButton {
+  display: inline-flex;
+  width: 36px;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  background: #fff5f5;
+  color: #b91c1c;
+}
+
+.itemSelectModal {
+  width: min(1120px, 100%);
+}
+
+.pickerToolbar .input {
+  max-width: 520px;
+}
+
+.itemPickerTableWrap {
+  max-height: min(560px, calc(100vh - 260px));
+  overflow: auto;
+  border: 1px solid #dbe6f5;
+  border-radius: 18px;
+  background: #fff;
+}
+
+.itemPickerTable {
+  min-width: 960px;
+}
+
+.itemPickerTable thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.itemPickerTable tbody tr {
+  cursor: pointer;
+}
+
+.pickerRowSelected td {
+  background: #eef6ff;
+}
+
+.checkbox {
+  width: 18px;
+  height: 18px;
+  accent-color: #0b5cad;
 }
 
 .dispatchPickerHead,
@@ -535,6 +688,21 @@
   }
 
   .formGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .fieldHeader,
+  .pickerToolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .pickerToolbar .input {
+    max-width: none;
+  }
+
+  .selectedItemsHead,
+  .selectedItemRow {
     grid-template-columns: 1fr;
   }
 

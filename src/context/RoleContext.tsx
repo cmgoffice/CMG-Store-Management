@@ -28,6 +28,22 @@ const SYSTEM_ROLES: UserRole[] = [
   'Keeper',
 ];
 
+const APP_ROLES: UserRole[] = [
+  'MasterAdmin',
+  'Store Center',
+  'Admin Site',
+  'Store Site',
+  'Keeper',
+  'Staff',
+];
+
+function sanitizeRoles(roles: readonly unknown[]): UserRole[] {
+  return roles.filter(
+    (role): role is UserRole =>
+      typeof role === 'string' && APP_ROLES.includes(role as UserRole)
+  );
+}
+
 export function RoleProvider({ children }: PropsWithChildren) {
   const { userProfile } = useAuth();
   const { activeProjectNo } = useInventory();
@@ -39,16 +55,10 @@ export function RoleProvider({ children }: PropsWithChildren) {
       return SYSTEM_ROLES;
     }
     
-    // MasterAdmin, SuperAdmin, Admin get access to switch to any role globally
-    if (
-      userProfile.role.includes('MasterAdmin') ||
-      userProfile.role.includes('SuperAdmin') ||
-      userProfile.role.includes('Admin')
-    ) {
+    // MasterAdmin gets access to switch to any role globally.
+    if (userProfile.role.includes('MasterAdmin')) {
       return [
         'MasterAdmin',
-        'SuperAdmin',
-        'Admin',
         'Store Center',
         'Admin Site',
         'Store Site',
@@ -59,12 +69,13 @@ export function RoleProvider({ children }: PropsWithChildren) {
 
     // Get roles specific to the active project
     if (activeProjectNo && userProfile.projectRoles) {
-      const rolesForProj = userProfile.projectRoles[activeProjectNo] || [];
+      const rolesForProj = sanitizeRoles(userProfile.projectRoles[activeProjectNo] || []);
       return rolesForProj.length > 0 ? rolesForProj : ['Staff'];
     }
 
     // Fallback to global roles if no project-specific roles are defined
-    return userProfile.role.length > 0 ? userProfile.role : ['Staff'];
+    const globalRoles = sanitizeRoles(userProfile.role);
+    return globalRoles.length > 0 ? globalRoles : ['Staff'];
   }, [userProfile, activeProjectNo]);
 
   // Adjust active role to match user's actual capabilities on the active project
@@ -76,10 +87,7 @@ export function RoleProvider({ children }: PropsWithChildren) {
 
   const value = useMemo<RoleContextValue>(
     () => {
-      const isAdmin =
-        activeRole === 'MasterAdmin' ||
-        activeRole === 'SuperAdmin' ||
-        activeRole === 'Admin';
+      const isAdmin = activeRole === 'MasterAdmin';
 
       const canDispatch = isAdmin || activeRole === 'Store Center';
       

@@ -12,8 +12,6 @@ interface HeaderProps {
 
 const roleLabels: Record<UserRole, string> = {
   'MasterAdmin': 'MasterAdmin',
-  'SuperAdmin': 'SuperAdmin',
-  'Admin': 'Admin',
   'Store Center': 'Store Center',
   'Admin Site': 'Admin Site',
   'Store Site': 'Store Site',

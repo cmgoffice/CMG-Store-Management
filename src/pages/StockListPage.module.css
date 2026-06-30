@@ -49,6 +49,58 @@
   cursor: pointer;
 }
 
+.inventoryTableScroll {
+  overflow-x: hidden;
+}
+
+.inventoryTable {
+  width: 100%;
+  min-width: 0;
+  table-layout: fixed;
+}
+
+.inventoryTable th,
+.inventoryTable td {
+  overflow: hidden;
+}
+
+.noColumn {
+  width: 42px;
+}
+
+.locationColumn {
+  width: 126px;
+}
+
+.itemSummaryColumn {
+  width: 180px;
+}
+
+.totalQtyColumn,
+.totalQtyCell {
+  width: 68px;
+}
+
+.statusColumn,
+.statusCell {
+  width: 82px;
+}
+
+.amountColumn,
+.amountCell {
+  width: 92px;
+}
+
+.locationCell {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.itemSummaryCell {
+  min-width: 0;
+}
+
 .expandButton {
   display: inline-flex;
   align-items: center;
@@ -59,6 +111,38 @@
   padding: 0;
   font: inherit;
   cursor: pointer;
+}
+
+.itemSummaryButton {
+  width: 100%;
+  min-width: 0;
+}
+
+.itemSummaryText {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+
+.projectQtyHeader,
+.projectQtyCell {
+  width: 54px;
+  min-width: 0;
+  padding-inline: 4px !important;
+}
+
+.projectQtyHeader {
+  color: #364152;
+  font-size: 10px !important;
+  font-weight: 800;
+}
+
+.projectQtyCell {
+  font-size: 12px !important;
+  font-weight: 700;
 }
 
 .detailRow td {

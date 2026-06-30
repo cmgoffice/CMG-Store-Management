@@ -40,7 +40,7 @@ export function App() {
                 <Route
                   path="/projects"
                   element={
-                    <ProtectedRoute requireApproved={true} requireRoles={['MasterAdmin', 'SuperAdmin', 'Admin', 'Admin Site', 'Staff']}>
+                    <ProtectedRoute requireApproved={true} requireRoles={['MasterAdmin', 'Admin Site', 'Staff']}>
                       <ProjectListPage />
                     </ProtectedRoute>
                   }
@@ -48,7 +48,7 @@ export function App() {
                 <Route
                   path="/store/stock"
                   element={
-                    <ProtectedRoute requireApproved={true} requireRoles={['MasterAdmin', 'SuperAdmin', 'Admin', 'Store Center']}>
+                    <ProtectedRoute requireApproved={true} requireRoles={['MasterAdmin', 'Store Center']}>
                       <StockListPage />
                     </ProtectedRoute>
                   }
@@ -57,7 +57,7 @@ export function App() {
                 <Route
                   path="/store/dispatch"
                   element={
-                    <ProtectedRoute requireApproved={true} requireRoles={['MasterAdmin', 'SuperAdmin', 'Admin', 'Store Center', 'Admin Site', 'Store Site', 'Staff']}>
+                    <ProtectedRoute requireApproved={true} requireRoles={['MasterAdmin', 'Store Center', 'Admin Site', 'Store Site', 'Staff']}>
                       <DispatchPage />
                     </ProtectedRoute>
                   }
@@ -68,7 +68,7 @@ export function App() {
                 <Route
                   path="/admin"
                   element={
-                    <ProtectedRoute requireApproved={true} requireRoles={['MasterAdmin', 'Admin']}>
+                    <ProtectedRoute requireApproved={true} requireRoles={['MasterAdmin']}>
                       <AdminPanel />
                     </ProtectedRoute>
                   }

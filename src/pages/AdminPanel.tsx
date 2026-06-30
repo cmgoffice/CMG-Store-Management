@@ -13,14 +13,33 @@ const APP_NAME = 'CMG-Store-Management';
 
 const AVAILABLE_ROLES: UserRole[] = [
   'MasterAdmin',
-  'SuperAdmin',
-  'Admin',
   'Store Center',
   'Admin Site',
   'Store Site',
   'Keeper',
   'Staff',
 ];
+
+function sanitizeRoles(roles: readonly unknown[]): UserRole[] {
+  return roles.filter(
+    (role): role is UserRole =>
+      typeof role === 'string' && AVAILABLE_ROLES.includes(role as UserRole)
+  );
+}
+
+function sanitizeProjectRoles(projectRoles?: Record<string, UserRole[]>) {
+  if (!projectRoles) {
+    return {};
+  }
+
+  return Object.entries(projectRoles).reduce<Record<string, UserRole[]>>(
+    (acc, [projectNo, roles]) => {
+      acc[projectNo] = sanitizeRoles(roles);
+      return acc;
+    },
+    {}
+  );
+}
 
 type DropdownPosition = {
   top: number;
@@ -150,9 +169,9 @@ export function AdminPanel() {
   // Open edit modal for a user
   const startEdit = (user: UserProfile) => {
     setEditingUser(user);
-    setEditRoles([...user.role]);
+    setEditRoles(sanitizeRoles(user.role));
     setEditProjects([...(user.assignedProjects || [])]);
-    setEditProjectRoles(user.projectRoles ? { ...user.projectRoles } : {});
+    setEditProjectRoles(sanitizeProjectRoles(user.projectRoles));
     setEditStatus(user.status);
     setIsRoleDropdownOpen(false);
     setOpenProjectRoleDropdown(null);
@@ -351,7 +370,7 @@ export function AdminPanel() {
                 </td>
                 <td>
                   <div className="flex flex-wrap gap-1">
-                    {user.role.map((r) => (
+                    {sanitizeRoles(user.role).map((r) => (
                       <span
                         key={r}
                         className="text-[10px] font-bold px-2 py-0.5 bg-[#f0ecfc] text-[#4f2ed9] rounded border border-purple-100"
@@ -372,7 +391,8 @@ export function AdminPanel() {
                     ) : user.assignedProjects && user.assignedProjects.length > 0 ? (
                       <div className="flex flex-nowrap items-center gap-1 overflow-hidden whitespace-nowrap">
                         {user.assignedProjects.map((pNo) => {
-                          const projRoles = user.projectRoles?.[pNo] || ['Staff'];
+                          const sanitizedRoles = sanitizeRoles(user.projectRoles?.[pNo] || ['Staff']);
+                          const projRoles = sanitizedRoles.length > 0 ? sanitizedRoles : ['Staff'];
                           return (
                             <div
                               key={pNo}
@@ -515,7 +535,7 @@ export function AdminPanel() {
               {/* Global Roles Selection (z-10010) */}
               <div className="relative overflow-visible">
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
-                  Global / System Roles (e.g. MasterAdmin, SuperAdmin)
+                  Global / System Roles
                 </label>
                 
                 {/* Trigger */}

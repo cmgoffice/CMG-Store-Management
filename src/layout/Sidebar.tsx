@@ -24,6 +24,8 @@ import { db } from '../firebase';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import styles from './Sidebar.module.css';
 
+type ActionMenuKey = 'receiving' | 'dispatch';
+
 interface SidebarProps {
   isOpen: boolean;
   onClose: () => void;
@@ -42,16 +44,20 @@ const groups = [
     icon: LayoutDashboard,
     items: [
       { to: '/', label: 'Dashboard', icon: BarChart3 },
-      { to: '/receiving', label: 'Receiving', icon: ClipboardCheck },
     ],
+  },
+  {
+    label: 'Inventory',
+    icon: PackageCheck,
+    items: [{ to: '/store/stock', label: 'Inventory', icon: PackageCheck }],
   },
   {
     label: 'Stock',
     icon: Boxes,
     items: [
-      { to: '/store/stock', label: 'Inventory', icon: PackageCheck },
+      { to: '/receiving', label: 'Receiving', icon: ClipboardCheck, actionKey: 'receiving' as const },
       { to: '/store/store', label: 'Store', icon: Store },
-      { to: '/store/dispatch', label: 'Dispatch', icon: SendToBack },
+      { to: '/store/dispatch', label: 'Dispatch', icon: SendToBack, actionKey: 'dispatch' as const },
     ],
   },
 ];
@@ -61,8 +67,38 @@ function getMiniProjectLabel(projectNo: string) {
   return trimmed.length <= 3 ? trimmed : trimmed.slice(-3);
 }
 
+function formatBadgeCount(count: number) {
+  return count > 99 ? '99+' : String(count);
+}
+
+function normalizeProjectNoText(value?: string) {
+  const text = value?.trim() ?? '';
+  if (!text) {
+    return '';
+  }
+
+  const projectMatch = text.match(/\bJ[-\s]?0*([0-9]+[a-z0-9]*)\b/i);
+  if (projectMatch) {
+    return `J${projectMatch[1].toUpperCase()}`;
+  }
+
+  const plainProjectMatch = text.match(/\b0*([0-9]+[a-z0-9]*)\b/i);
+  if (plainProjectMatch) {
+    return `J${plainProjectMatch[1].toUpperCase()}`;
+  }
+
+  return text;
+}
+
 export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: SidebarProps) {
-  const { projects, activeProjects, activeProjectNo, setActiveProjectNo } = useInventory();
+  const {
+    projects,
+    activeProjects,
+    activeProjectNo,
+    setActiveProjectNo,
+    stockItems,
+    receivingRequests,
+  } = useInventory();
   const { userProfile, logout } = useAuth();
   const { activeRole } = useRole();
   const navigate = useNavigate();
@@ -76,7 +112,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
             return !['Store Center', 'Store Site', 'Keeper'].includes(activeRole);
           }
           if (item.to === '/store/stock') {
-            return !['Admin Site', 'Store Site', 'Keeper', 'Staff'].includes(activeRole);
+            return ['MasterAdmin', 'Store Center'].includes(activeRole);
           }
           if (item.to === '/store/dispatch') {
             return activeRole !== 'Keeper';
@@ -91,6 +127,54 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
   const miniProjects = useMemo(() => activeProjects, [activeProjects]);
   const activeProject = activeProjects.find((project) => project.projectNo === activeProjectNo)
     ?? projects.find((project) => project.projectNo === activeProjectNo);
+  const normalizedActiveProjectNo = normalizeProjectNoText(activeProjectNo);
+
+  const actionBadges = useMemo<Record<ActionMenuKey, { count: number; title: string }>>(() => {
+    const isForActiveProject = (projectCode: string) =>
+      !normalizedActiveProjectNo || projectCode === normalizedActiveProjectNo;
+
+    const pendingReceivingCount = receivingRequests.filter((request) => {
+      const projectCode = normalizeProjectNoText(
+        request.cmgProjectCode ||
+          request.projectItemCode ||
+          request.projectNo ||
+          request.projectId ||
+          request.projectName ||
+          request.location
+      );
+      return request.requestStatus === 'pending' && isForActiveProject(projectCode);
+    }).length;
+
+    const incomingItemsCount = stockItems.filter((item) => {
+      const projectCode = normalizeProjectNoText(
+        item.cmgProjectCode ||
+          item.projectId ||
+          item.purchasedForProject ||
+          item.location
+      );
+      return item.status === 'In Transit' && isForActiveProject(projectCode);
+    }).length;
+
+    const dispatchableCount = ['MasterAdmin', 'Store Center'].includes(activeRole)
+      ? stockItems.filter(
+        (item) =>
+          item.status === 'Pending Dispatch' &&
+          item.location === 'Store Center' &&
+          item.purchasedForProject === `Project ${activeProjectNo}`
+      ).length
+      : 0;
+
+    return {
+      receiving: {
+        count: pendingReceivingCount + incomingItemsCount,
+        title: `Receiving รอ Action ${pendingReceivingCount + incomingItemsCount} รายการ: รับเข้าใหม่ ${pendingReceivingCount}, ย้ายโครงการ ${incomingItemsCount}`,
+      },
+      dispatch: {
+        count: dispatchableCount,
+        title: `Dispatch รอ Action ${dispatchableCount} รายการ`,
+      },
+    };
+  }, [activeProjectNo, activeRole, normalizedActiveProjectNo, receivingRequests, stockItems]);
 
   const [pendingCount, setPendingCount] = useState(0);
 
@@ -114,6 +198,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
     Overview: true,
     Project: true,
+    Inventory: true,
     Stock: true,
   });
 
@@ -254,6 +339,10 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
           <nav className={styles.nav} aria-label="Main navigation">
             {filteredGroups.map((group) => {
               const isExpanded = !!openGroups[group.label];
+              const groupPendingCount = group.items.reduce((sum, item) => {
+                const actionKey = 'actionKey' in item ? item.actionKey as ActionMenuKey | undefined : undefined;
+                return sum + (actionKey ? actionBadges[actionKey].count : 0);
+              }, 0);
               return (
                 <section key={group.label} className={styles.group}>
                   <button
@@ -264,6 +353,11 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
                   >
                     {group.icon ? <group.icon size={16} className={styles.groupIcon} /> : null}
                     <span className={styles.groupTitle}>{group.label}</span>
+                    {groupPendingCount > 0 ? (
+                      <span className={styles.groupBadge} title={`มีงานรอ Action ${groupPendingCount} รายการ`}>
+                        {formatBadgeCount(groupPendingCount)}
+                      </span>
+                    ) : null}
                     <ChevronDown
                       size={14}
                       className={`${styles.chevron} ${isExpanded ? styles.chevronExpanded : ''}`}
@@ -271,20 +365,31 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
                   </button>
                   <div className={`${styles.itemsContainer} ${isExpanded ? styles.itemsExpanded : ''}`}>
                     <div className={styles.itemsInner}>
-                      {group.items.map((item) => (
-                        <NavLink
-                          key={item.to}
-                          to={item.to}
-                          end={item.to === '/'}
-                          className={({ isActive }) =>
-                            `${styles.link} ${isActive ? styles.active : ''}`
-                          }
-                          onClick={onClose}
-                        >
-                          <item.icon size={16} />
-                          <span>{item.label}</span>
-                        </NavLink>
-                      ))}
+                      {group.items.map((item) => {
+                        const actionKey = 'actionKey' in item ? item.actionKey as ActionMenuKey | undefined : undefined;
+                        const badge = actionKey ? actionBadges[actionKey] : undefined;
+
+                        return (
+                          <NavLink
+                            key={item.to}
+                            to={item.to}
+                            end={item.to === '/'}
+                            className={({ isActive }) =>
+                              `${styles.link} ${isActive ? styles.active : ''}`
+                            }
+                            onClick={onClose}
+                            title={badge && badge.count > 0 ? badge.title : undefined}
+                          >
+                            <item.icon size={16} />
+                            <span className={styles.linkText}>{item.label}</span>
+                            {badge && badge.count > 0 ? (
+                              <span className={styles.menuBadge} aria-label={badge.title}>
+                                {formatBadgeCount(badge.count)}
+                              </span>
+                            ) : null}
+                          </NavLink>
+                        );
+                      })}
                     </div>
                   </div>
                 </section>
@@ -293,7 +398,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
           </nav>
 
           <div className={styles.bottomNav}>
-            {(activeRole === 'MasterAdmin' || activeRole === 'Admin') && (
+            {activeRole === 'MasterAdmin' && (
               <NavLink
                 className={({ isActive }) => `${styles.link} ${isActive ? styles.active : ''}`}
                 to="/admin"

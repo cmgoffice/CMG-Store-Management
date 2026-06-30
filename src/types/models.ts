@@ -15,6 +15,7 @@ export interface Project {
 }
 
 export type StockStatus =
+  | 'Available'
   | 'Pending Dispatch'
   | 'In Transit'
   | 'Received at Site';
@@ -154,8 +155,6 @@ export interface DispatchRecord {
 
 export type UserRole =
   | 'MasterAdmin'
-  | 'SuperAdmin'
-  | 'Admin'
   | 'Store Center'
   | 'Admin Site'
   | 'Store Site'

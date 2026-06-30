@@ -242,6 +242,27 @@
   white-space: nowrap;
 }
 
+.groupBadge,
+.menuBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #ffde59;
+  color: #533700;
+  font-weight: 900;
+  line-height: 1;
+  text-align: center;
+  box-shadow: 0 8px 18px rgb(255 222 89 / 22%);
+}
+
+.groupBadge {
+  min-width: 20px;
+  height: 20px;
+  padding: 0 6px;
+  font-size: 10px;
+}
+
 .chevron {
   flex-shrink: 0;
   margin-left: auto;
@@ -327,6 +348,23 @@
 .active:hover {
   background: var(--color-sidebar-active);
   color: var(--color-sidebar-active-text);
+}
+
+.linkText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menuBadge {
+  flex-shrink: 0;
+  min-width: 18px;
+  height: 18px;
+  margin-left: auto;
+  padding: 0 5px;
+  font-size: 9px;
 }
 
 .active::before,

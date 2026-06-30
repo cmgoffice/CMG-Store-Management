@@ -1,95 +1,323 @@
-import { PackagePlus } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { ChevronDown, ChevronRight } from 'lucide-react';
+import { Fragment, useMemo, useState } from 'react';
 import { PageHeader } from '../components/PageHeader';
 import { SearchField } from '../components/SearchField';
-import { StatCard } from '../components/StatCard';
-import { StatusBadge } from '../components/StatusBadge';
 import { useInventory } from '../context/InventoryContext';
-import { useRole } from '../context/RoleContext';
 import type { StockItem } from '../types/models';
-import { getStockItemId } from '../utils/stockItem';
 import '../styles/tables.css';
-import styles from './StockListPage.module.css'; // Reusing standard stock select & button layout styles
+import styles from './StockListPage.module.css';
+
+type StoreAvailability = 'Available' | 'Unavailable';
+
+type StoreReceiveHistory = {
+  id: string;
+  receiveDate: string;
+  prNo: string;
+  receivedByName: string;
+  qty: number;
+  amount: number;
+  sortValue: number;
+};
+
+type AggregatedStoreItem = {
+  id: string;
+  location: string;
+  vendorName: string;
+  itemDescription: string;
+  itemNo: string;
+  qty: number;
+  amount: number;
+  availability: StoreAvailability;
+  searchText: string;
+  history: StoreReceiveHistory[];
+};
+
+function normalizeLookupKey(value: unknown) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function normalizeProjectNo(value: unknown) {
+  const text = typeof value === 'string' ? value.trim() : '';
+  if (!text) {
+    return '';
+  }
+
+  const projectMatch = text.match(/\bJ[-\s]?0*([0-9]+[a-z0-9]*)\b/i);
+  if (projectMatch) {
+    return `J${projectMatch[1].toUpperCase()}`;
+  }
+
+  return text.toUpperCase();
+}
+
+function extractProjectNoFromLabel(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return '';
+  }
+
+  const patterns = [
+    /^Project\s+(.+)$/i,
+    /^Store\s+(.+)$/i,
+    /^In Transit to\s+Project\s+(.+)$/i,
+    /^In Transit to\s+Store\s+(.+)$/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = trimmed.match(pattern);
+    if (match?.[1]) {
+      return normalizeProjectNo(match[1]);
+    }
+  }
+
+  return '';
+}
+
+function getStockItemProjectNo(item: StockItem) {
+  return (
+    normalizeProjectNo(item.cmgProjectCode) ||
+    extractProjectNoFromLabel(item.purchasedForProject) ||
+    extractProjectNoFromLabel(item.location) ||
+    normalizeProjectNo(item.projectId)
+  );
+}
+
+function buildCompositeItemKey(projectNo: string, itemNo: string, itemDescription: string) {
+  return [
+    normalizeLookupKey(projectNo),
+    normalizeLookupKey(itemNo),
+    normalizeLookupKey(itemDescription),
+  ].join('::');
+}
+
+function buildDescriptionOnlyKey(projectNo: string, itemDescription: string) {
+  return [normalizeLookupKey(projectNo), normalizeLookupKey(itemDescription)].join('::');
+}
+
+function parseDateValue(value: string) {
+  const normalized = value.trim();
+  if (!normalized) {
+    return null;
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+    return new Date(`${normalized}T00:00:00+07:00`);
+  }
+
+  const parsed = new Date(normalized);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function getDateSortValue(value: string) {
+  const parsed = parseDateValue(value);
+  return parsed ? parsed.getTime() : 0;
+}
+
+function formatBangkokDateTime(value: string) {
+  const parsed = parseDateValue(value);
+  if (!parsed) {
+    return value || '-';
+  }
+
+  const formatter = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Bangkok',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+
+  return formatter
+    .format(parsed)
+    .replace(/\//g, '-')
+    .replace(',', '');
+}
 
 export function StorePage() {
-  const { stockItems, receiveNewItem, activeProjectNo } = useInventory();
-  const { canReceiveStock, isReadOnly } = useRole();
+  const {
+    stockItems,
+    receivingRequests,
+    activeProjectNo,
+  } = useInventory();
   const [query, setQuery] = useState('');
-  const activeStoreLocations = useMemo(
-    () => ['Store Center', activeProjectNo ? `Store ${activeProjectNo}` : ''].filter(Boolean),
-    [activeProjectNo]
-  );
+  const [expandedItemIds, setExpandedItemIds] = useState<string[]>([]);
+  const normalizedActiveProjectNo = normalizeProjectNo(activeProjectNo);
 
-  const storeItems = useMemo(() => {
-    return stockItems.filter(
-      (item) =>
-        activeStoreLocations.includes(item.location) &&
-        item.purchasedForProject === `Project ${activeProjectNo}`,
-    );
-  }, [activeProjectNo, activeStoreLocations, stockItems]);
-
-  const filteredItems = useMemo(() => {
+  const filteredItems = useMemo<AggregatedStoreItem[]>(() => {
     const normalized = query.trim().toLowerCase();
-    if (!normalized) {
-      return storeItems;
-    }
+    const requestByKey = new Map<string, (typeof receivingRequests)[number]>();
+    const requestByItemKey = new Map<string, (typeof receivingRequests)[number]>();
+    const requestByDescriptionKey = new Map<string, (typeof receivingRequests)[number]>();
 
-    return storeItems.filter((item) => {
-      return [
-        item.receiveDate,
-        item.receiveNo,
-        item.prNo,
-        item.poNo,
-        item.purchasedForProject,
-        item.vendorName,
-        item.itemDescription,
-        item.itemNo,
+    receivingRequests.forEach((request) => {
+      [
+        request.id,
+        request.receiveNo,
+        request.documentNo,
+        request.poNo,
+        request.poId,
+        request.prNo,
       ]
-        .join(' ')
-        .toLowerCase()
-        .includes(normalized);
+        .map((value) => normalizeLookupKey(value))
+        .filter(Boolean)
+        .forEach((key) => {
+          requestByKey.set(key, request);
+        });
+
+      request.stockReceiveNos?.forEach((stockReceiveNo) => {
+        const key = normalizeLookupKey(stockReceiveNo);
+        if (key) {
+          requestByKey.set(key, request);
+        }
+      });
+
+      request.items.forEach((requestItem) => {
+        requestByItemKey.set(
+          buildCompositeItemKey(request.projectNo, requestItem.itemNo, requestItem.itemDescription),
+          request
+        );
+        requestByDescriptionKey.set(
+          buildDescriptionOnlyKey(request.projectNo, requestItem.itemDescription),
+          request
+        );
+      });
     });
-  }, [query, storeItems]);
 
-  const stockValue = useMemo(() => {
-    return filteredItems.reduce((sum, item) => sum + item.amount, 0);
-  }, [filteredItems]);
+    const projectItems = normalizedActiveProjectNo
+      ? stockItems.filter((item) => getStockItemProjectNo(item) === normalizedActiveProjectNo)
+      : [];
 
-  const totalQty = useMemo(() => {
-    return filteredItems.reduce((sum, item) => sum + item.qty, 0);
-  }, [filteredItems]);
+    const groupedItems = new Map<
+      string,
+      {
+        items: StockItem[];
+        qty: number;
+        amount: number;
+        locations: Set<string>;
+        vendors: Set<string>;
+      }
+    >();
 
-  const [isSubmitting, setIsSubmitting] = useState(false);
+    projectItems.forEach((item) => {
+      const groupKey = `${item.itemNo.trim().toLowerCase()}::${item.itemDescription.trim().toLowerCase()}`;
+      const currentGroup = groupedItems.get(groupKey) ?? {
+        items: [],
+        qty: 0,
+        amount: 0,
+        locations: new Set<string>(),
+        vendors: new Set<string>(),
+      };
 
-  const handleReceiveMockItem = async () => {
-    if (isSubmitting) return;
-    setIsSubmitting(true);
+      currentGroup.items.push(item);
+      currentGroup.qty += item.qty;
+      currentGroup.amount += item.amount;
+      currentGroup.locations.add(item.location.trim());
+      if (item.vendorName.trim()) {
+        currentGroup.vendors.add(item.vendorName.trim());
+      }
 
-    const sequence = String(stockItems.length + 1).padStart(3, '0');
-    const newItem: StockItem = {
-      receiveNo: `RCV-2026-${sequence}`,
-      poNo: `PO-2606-${120 + stockItems.length}`,
-      prNo: `PR-2606-${220 + stockItems.length}`,
-      poType: 'Material',
-      itemNo: `GEN-${sequence}`,
-      itemDescription: 'General construction supplies',
-      amount: 28500,
-      qty: 25,
-      vendorName: 'Central Construction Supply',
-      location: 'Store Center',
-      purchasedForProject: activeProjectNo ? `Project ${activeProjectNo}` : 'Project J74',
-      receiveName: 'Narin Store',
-      receiveDate: `2026-06-22-${sequence}`,
-      status: 'Pending Dispatch',
-    };
+      groupedItems.set(groupKey, currentGroup);
+    });
 
-    try {
-      await receiveNewItem(newItem);
-    } catch (error) {
-      console.error('Failed to receive item:', error);
-    } finally {
-      setIsSubmitting(false);
-    }
+    return Array.from(groupedItems.values())
+      .map((group) => {
+        const representative = group.items[0];
+        const location = Array.from(group.locations).filter(Boolean).join(', ') || '-';
+        const vendorName = Array.from(group.vendors).join(', ') || '-';
+        const availability: StoreAvailability = group.qty > 0 ? 'Available' : 'Unavailable';
+        const history = [...group.items]
+          .map((item) => {
+            const requestKeys = [
+              item.stockItemId,
+              item.receiveNo,
+              item.sourceReceiveNo,
+              item.rpNo,
+              item.documentNo,
+              item.poNo,
+              item.poId ? String(item.poId) : '',
+              item.prNo,
+            ]
+              .map((value) => normalizeLookupKey(value))
+              .filter(Boolean);
+            const request =
+              requestKeys
+                .map((key) => requestByKey.get(key))
+                .find(Boolean) ??
+              requestByItemKey.get(
+                buildCompositeItemKey(normalizedActiveProjectNo, item.itemNo, item.itemDescription)
+              ) ??
+              requestByDescriptionKey.get(
+                buildDescriptionOnlyKey(normalizedActiveProjectNo, item.itemDescription)
+              );
+            const rawReceiveDate =
+              item.lastReceivedAt ||
+              item.receiveDate ||
+              request?.approvedAt ||
+              request?.requestedAt ||
+              request?.receiveDate ||
+              '-';
+            const prNo = item.prNo || request?.prNo || '-';
+            const receivedByName =
+              item.receivedByName ||
+              request?.approvedByName ||
+              request?.receivedByName ||
+              item.receiveName ||
+              request?.receiveName ||
+              '-';
+
+            return {
+              id: item.stockItemId || item.receiveNo,
+              receiveDate: formatBangkokDateTime(rawReceiveDate),
+              prNo,
+              receivedByName,
+              qty: item.qty,
+              amount: item.amount,
+              sortValue: getDateSortValue(rawReceiveDate),
+            };
+          })
+          .sort((left, right) => right.sortValue - left.sortValue);
+        const searchText = [
+          location,
+          vendorName,
+          representative.itemDescription,
+          representative.itemNo,
+          normalizedActiveProjectNo,
+          String(group.qty),
+          ...history.flatMap((entry) => [entry.prNo, entry.receivedByName, entry.receiveDate]),
+          ...group.items.flatMap((item) => [item.receiveNo, item.prNo, item.poNo]),
+        ]
+          .join(' ')
+          .toLowerCase();
+
+        return {
+          id: `${representative.itemNo}-${representative.itemDescription}`,
+          location,
+          vendorName,
+          itemDescription: representative.itemDescription,
+          itemNo: representative.itemNo,
+          qty: group.qty,
+          amount: group.amount,
+          availability,
+          searchText,
+          history,
+        };
+      })
+      .filter((item) => !normalized || item.searchText.includes(normalized))
+      .sort((left, right) => {
+        const leftSortValue = left.history[0]?.sortValue ?? 0;
+        const rightSortValue = right.history[0]?.sortValue ?? 0;
+        return rightSortValue - leftSortValue;
+      });
+  }, [normalizedActiveProjectNo, query, receivingRequests, stockItems]);
+
+  const handleToggleExpand = (itemId: string) => {
+    setExpandedItemIds((current) =>
+      current.includes(itemId)
+        ? current.filter((id) => id !== itemId)
+        : [...current, itemId]
+    );
   };
 
   return (
@@ -98,106 +326,121 @@ export function StorePage() {
         eyebrow="Project Store"
         title="Store Inventory"
         description={
-          activeProjectNo
-            ? `Detailed list of items currently held in the store of Project ${activeProjectNo}, including central stock and received dispatches.`
-            : 'Detailed list of items currently held in the active project store.'
+          normalizedActiveProjectNo
+            ? `Inventory table for Project ${normalizedActiveProjectNo}.`
+            : 'Select an active project to view store inventory.'
         }
         actions={
-          <>
-            <SearchField
-              value={query}
-              onChange={setQuery}
-              placeholder="Search store items"
-            />
-            {canReceiveStock && !isReadOnly ? (
-              <button
-                className={styles.primaryButton}
-                type="button"
-                onClick={handleReceiveMockItem}
-                disabled={isSubmitting}
-              >
-                {isSubmitting ? (
-                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin mr-1.5" />
-                ) : (
-                  <PackagePlus size={16} />
-                )}
-                <span>{isSubmitting ? 'Receiving...' : 'Receive New Item'}</span>
-              </button>
-            ) : null}
-          </>
+          <SearchField
+            value={query}
+            onChange={setQuery}
+            placeholder="Search store items"
+          />
         }
       />
 
-      <section
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
-          gap: '20px',
-          marginBottom: '24px',
-        }}
-      >
-        <StatCard
-          label="Stock Value in Store"
-          value={`${stockValue.toLocaleString()} THB`}
-          detail="Total value of items in the active project store"
-          tone="purple"
-        />
-        <StatCard
-          label="Total Quantity"
-          value={totalQty.toLocaleString()}
-          detail="Total units of items in the active project store"
-          tone="pink"
-        />
-        <StatCard
-          label="Available Lines"
-          value={filteredItems.length}
-          detail="Distinct inventory line items"
-          tone="blue"
-        />
-      </section>
-
-      <div className="tableScroll">
-        <table className="table compact">
+      <div className={`tableScroll ${styles.inventoryTableScroll}`}>
+        <table className={`table compact ${styles.inventoryTable}`}>
           <thead>
             <tr>
-              <th>Date-Sequence</th>
-              <th>PR No.</th>
-              <th>Purchased For Project</th>
-              <th>Store Location</th>
-              <th>Vendor Name</th>
-              <th>Item Summary</th>
-              <th className="numeric">QTY</th>
-              <th>Status</th>
-              <th className="numeric">Amount</th>
+              <th className={styles.noColumn}>No</th>
+              <th className={styles.locationColumn}>Current Location</th>
+              <th className={styles.itemSummaryColumn}>Item Summary</th>
+              <th className={`${styles.totalQtyColumn} numeric`}>
+                {normalizedActiveProjectNo || 'Qty'}
+              </th>
+              <th className={styles.statusColumn}>Status</th>
+              <th className={`${styles.amountColumn} numeric`}>Amount</th>
             </tr>
           </thead>
           <tbody>
-            {filteredItems.map((item) => (
-              <tr key={getStockItemId(item)}>
-                <td>{item.receiveDate}</td>
-                <td>{item.prNo}</td>
-                <td>{item.purchasedForProject}</td>
-                <td>{item.location}</td>
-                <td>{item.vendorName}</td>
-                <td>
-                  <span className="itemSummaryCompact">
-                    <strong>{item.itemDescription}</strong>
-                    <span className="itemCodeCompact">
-                      ({item.itemNo})
-                    </span>
-                  </span>
-                </td>
-                <td className="numeric">{item.qty.toLocaleString()}</td>
-                <td>
-                  <StatusBadge status={item.status} />
-                </td>
-                <td className="numeric">{item.amount.toLocaleString()}</td>
-              </tr>
-            ))}
+            {filteredItems.map((item, index) => {
+              const isExpanded = expandedItemIds.includes(item.id);
+
+              return (
+                <Fragment key={item.id}>
+                  <tr
+                    className={styles.expandableRow}
+                    onClick={() => handleToggleExpand(item.id)}
+                  >
+                    <td className={styles.noColumn}>{index + 1}</td>
+                    <td className={styles.locationCell} title={item.location}>
+                      {item.location}
+                    </td>
+                    <td className={styles.itemSummaryCell}>
+                      <button
+                        type="button"
+                        className={`${styles.expandButton} ${styles.itemSummaryButton}`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleToggleExpand(item.id);
+                        }}
+                        aria-expanded={isExpanded}
+                      >
+                        {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        <span className={styles.itemSummaryText} title={item.itemDescription}>
+                          {item.itemDescription}
+                        </span>
+                      </button>
+                    </td>
+                    <td className={`${styles.totalQtyCell} numeric ${item.qty === 0 ? 'muted' : ''}`}>
+                      {item.qty === 0 ? '-' : item.qty.toLocaleString()}
+                    </td>
+                    <td className={styles.statusCell}>
+                      <span
+                        className={`${styles.availabilityBadge} ${
+                          item.availability === 'Available'
+                            ? styles.available
+                            : styles.unavailable
+                        }`}
+                      >
+                        {item.availability}
+                      </span>
+                    </td>
+                    <td className={`${styles.amountCell} numeric`}>{item.amount.toLocaleString()}</td>
+                  </tr>
+                  {isExpanded ? (
+                    <tr className={styles.detailRow}>
+                      <td colSpan={6}>
+                        <div className={styles.detailPanel}>
+                          <table className={styles.detailTable}>
+                            <thead>
+                              <tr>
+                                <th>No</th>
+                                <th>Receive Date</th>
+                                <th>PR No.</th>
+                                <th>Received By</th>
+                                <th className="numeric">Qty</th>
+                                <th className="numeric">Amount</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {item.history.map((historyItem, historyIndex) => (
+                                <tr key={historyItem.id}>
+                                  <td>{historyIndex + 1}</td>
+                                  <td>{historyItem.receiveDate}</td>
+                                  <td>{historyItem.prNo}</td>
+                                  <td>{historyItem.receivedByName}</td>
+                                  <td className="numeric">{historyItem.qty.toLocaleString()}</td>
+                                  <td className="numeric">{historyItem.amount.toLocaleString()}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
+              );
+            })}
             {filteredItems.length === 0 ? (
               <tr>
-                <td colSpan={9} style={{ textAlign: 'center', padding: '24px', color: 'var(--color-on-surface-variant)' }}>
-                  No items in the active project store match the current filters.
+                <td
+                  colSpan={6}
+                  className="text-center py-6 text-slate-400 font-semibold text-sm"
+                >
+                  No store items match the active project and current filters.
                 </td>
               </tr>
             ) : null}

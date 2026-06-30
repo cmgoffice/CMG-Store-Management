@@ -244,6 +244,19 @@ function normalizeCmgProjectCode(...values: unknown[]) {
   return '';
 }
 
+function getStockItemProjectNo(item: Pick<StockItem, 'cmgProjectCode' | 'purchasedForProject' | 'location' | 'projectId'>) {
+  return normalizeCmgProjectCode(
+    item.cmgProjectCode,
+    item.purchasedForProject,
+    item.location,
+    item.projectId,
+  );
+}
+
+function projectNoMatches(left: string, right: string) {
+  return left === right || normalizeProjectNoText(left) === normalizeProjectNoText(right);
+}
+
 function normalizeProjectNoFromRequest(data: DocumentData) {
   const projectCandidates = [
     data.projectNo,
@@ -633,8 +646,6 @@ export function InventoryProvider({ children }: PropsWithChildren) {
 
     if (
       userProfile.role.includes('MasterAdmin') ||
-      userProfile.role.includes('SuperAdmin') ||
-      userProfile.role.includes('Admin') ||
       userProfile.role.includes('Store Center')
     ) {
       return projectList;
@@ -656,8 +667,6 @@ export function InventoryProvider({ children }: PropsWithChildren) {
 
     if (
       userProfile.role.includes('MasterAdmin') ||
-      userProfile.role.includes('SuperAdmin') ||
-      userProfile.role.includes('Admin') ||
       userProfile.role.includes('Store Center')
     ) {
       return dispatchList;
@@ -697,23 +706,50 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       }))
       .filter((line) => line.receiveNo && Number.isFinite(line.qty) && line.qty > 0);
 
-    if (!normalizedLines.length || !sourceProjectNo || !projectNo || sourceProjectNo === projectNo) {
-      return;
+    if (!sourceProjectNo) {
+      throw new Error('Please select a source project before dispatching.');
     }
 
-    const sourceProject = projectList.find((project) => project.projectNo === sourceProjectNo);
-    const targetProject = projectList.find((project) => project.projectNo === projectNo);
+    if (!projectNo) {
+      throw new Error('Please select a destination project before dispatching.');
+    }
+
+    if (projectNoMatches(sourceProjectNo, projectNo)) {
+      throw new Error('Destination project must be different from the source project.');
+    }
+
+    if (!normalizedLines.length) {
+      throw new Error('Please select at least one item and enter dispatch qty greater than 0.');
+    }
+
+    const sourceProject = projectList.find((project) => projectNoMatches(project.projectNo, sourceProjectNo));
+    const targetProject = projectList.find((project) => projectNoMatches(project.projectNo, projectNo));
+    const normalizedSourceProjectNo = normalizeProjectNoText(sourceProjectNo);
+
+    if (!sourceProject || !targetProject) {
+      throw new Error('Source or destination project could not be found. Please refresh and try again.');
+    }
+
     const selectedItems = normalizedLines.map((line) => {
       const sourceItem = items.find((item) => getStockItemId(item) === line.receiveNo);
+      const sourceItemProjectNo = sourceItem ? getStockItemProjectNo(sourceItem) : '';
 
       if (
-        !sourceItem ||
-        sourceItem.location !== 'Store Center' ||
-        sourceItem.status !== 'Pending Dispatch' ||
-        sourceItem.purchasedForProject !== createProjectLabel(sourceProjectNo) ||
-        line.qty > sourceItem.qty
+        !sourceItem
       ) {
-        throw new Error(`Invalid dispatch selection for ${line.receiveNo}`);
+        throw new Error(`Item ${line.receiveNo} could not be found. Please refresh and try again.`);
+      }
+
+      if (sourceItemProjectNo !== normalizedSourceProjectNo) {
+        throw new Error(`Item ${sourceItem.receiveNo} is not in the active source project.`);
+      }
+
+      if (sourceItem.qty <= 0 || sourceItem.status === 'In Transit') {
+        throw new Error(`Item ${sourceItem.receiveNo} is not available for dispatch.`);
+      }
+
+      if (line.qty > sourceItem.qty) {
+        throw new Error(`Dispatch qty for ${sourceItem.receiveNo} is greater than available qty.`);
       }
 
       return {
@@ -721,10 +757,6 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         sourceItem,
       };
     });
-
-    if (!selectedItems.length || !sourceProject || !targetProject) {
-      return;
-    }
 
     const dispatchNo = createDispatchNumber();
     const dispatchId = dispatchNo;
@@ -804,9 +836,6 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       batch.update(sourceRef, {
         qty: remainingQty,
         amount: remainingAmount,
-        status: 'Pending Dispatch',
-        location: 'Store Center',
-        purchasedForProject: createProjectLabel(sourceProjectNo),
       });
 
       const dispatchedItemId = dispatchSnapshots[index].stockReceiveNo;

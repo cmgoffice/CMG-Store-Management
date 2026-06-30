@@ -13,7 +13,11 @@
 }
 
 .tabButton {
+  display: inline-flex;
   min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
   border: 0;
   border-radius: 6px;
   padding: 0 14px;
@@ -27,6 +31,22 @@
   background: #fff;
   color: #23436c;
   box-shadow: 0 10px 24px rgb(51 84 126 / 10%);
+}
+
+.tabBadge {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #e11d48;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1;
+  box-shadow: 0 8px 16px rgb(225 29 72 / 18%);
 }
 
 .notice {
@@ -159,10 +179,152 @@
   width: 14%;
 }
 
+.historyTable {
+  min-width: 1260px;
+}
+
+.historyTable th,
+.historyTable td {
+  vertical-align: top;
+}
+
+.historyTable th:nth-child(1),
+.historyTable td:nth-child(1) {
+  width: 48px;
+}
+
+.historyTable th:nth-child(2),
+.historyTable td:nth-child(2) {
+  width: 138px;
+}
+
+.historyTable th:nth-child(3),
+.historyTable td:nth-child(3) {
+  width: 150px;
+}
+
+.historyTable th:nth-child(4),
+.historyTable td:nth-child(4) {
+  width: 300px;
+}
+
+.historyTable th:nth-child(5),
+.historyTable td:nth-child(5),
+.historyTable th:nth-child(6),
+.historyTable td:nth-child(6) {
+  width: 130px;
+}
+
+.historyTable th:nth-child(7),
+.historyTable td:nth-child(7) {
+  width: 118px;
+}
+
+.historyTable th:nth-child(8),
+.historyTable td:nth-child(8) {
+  width: 220px;
+}
+
+.historyTable th:nth-child(9),
+.historyTable td:nth-child(9) {
+  width: 86px;
+}
+
+.historyTable .itemStack {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  white-space: normal;
+}
+
+.historyTable .stockChip {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dispatchTable {
+  min-width: 1180px;
+}
+
+.dispatchTable th:nth-child(1),
+.dispatchTable td:nth-child(1) {
+  width: 130px;
+}
+
+.dispatchTable th:nth-child(2),
+.dispatchTable td:nth-child(2) {
+  width: 180px;
+}
+
+.dispatchTable th:nth-child(3),
+.dispatchTable td:nth-child(3),
+.dispatchTable th:nth-child(4),
+.dispatchTable td:nth-child(4) {
+  width: 120px;
+}
+
+.dispatchTable th:nth-child(5),
+.dispatchTable td:nth-child(5) {
+  width: 300px;
+}
+
+.dispatchTable th:nth-child(6),
+.dispatchTable td:nth-child(6) {
+  width: 110px;
+}
+
+.dispatchTable th:nth-child(7),
+.dispatchTable td:nth-child(7) {
+  width: 130px;
+}
+
+.dispatchTable th:nth-child(8),
+.dispatchTable td:nth-child(8) {
+  width: 94px;
+}
+
+.dispatchTable th:last-child,
+.dispatchTable td:last-child {
+  width: 150px;
+}
+
+.dispatchTable .itemStack,
+.photoList,
+.routeCell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  white-space: normal;
+}
+
+.routeCell {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+.routeCell span {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.dispatchTable .noteText {
+  white-space: normal;
+}
+
 .descriptionCell {
   max-width: 0;
   color: #23436c;
   line-height: 1.4;
+}
+
+.historyTable td.historyDescriptionCell {
+  max-width: none;
+  white-space: normal !important;
+  word-break: normal;
+  overflow-wrap: anywhere;
 }
 
 .sectionHeader {
@@ -242,6 +404,12 @@
 .stockChip {
   background: #ecfdf3;
   color: #166534;
+}
+
+.photoLink {
+  color: #0b5cad;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .approveButton {
