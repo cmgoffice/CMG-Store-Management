@@ -9,6 +9,7 @@ import {
   LayoutDashboard,
   LogOut,
   PackageCheck,
+  PackageMinus,
   SendToBack,
   Settings,
   Store,
@@ -24,7 +25,7 @@ import { db } from '../firebase';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import styles from './Sidebar.module.css';
 
-type ActionMenuKey = 'receiving' | 'dispatch';
+type ActionMenuKey = 'receiving' | 'dispatch' | 'withdraw';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -57,6 +58,7 @@ const groups = [
     items: [
       { to: '/receiving', label: 'Receiving', icon: ClipboardCheck, actionKey: 'receiving' as const },
       { to: '/store/store', label: 'Store', icon: Store },
+      { to: '/store/withdraw', label: 'Withdraw', icon: PackageMinus, actionKey: 'withdraw' as const },
       { to: '/store/dispatch', label: 'Dispatch', icon: SendToBack, actionKey: 'dispatch' as const },
     ],
   },
@@ -69,6 +71,15 @@ function getMiniProjectLabel(projectNo: string) {
 
 function formatBadgeCount(count: number) {
   return count > 99 ? '99+' : String(count);
+}
+
+function isWithdrawOverdue(dueDate?: string) {
+  if (!dueDate) {
+    return false;
+  }
+
+  const parsedDueDate = new Date(dueDate.includes('T') ? dueDate : `${dueDate}T23:59:59`);
+  return Number.isFinite(parsedDueDate.getTime()) && parsedDueDate.getTime() < Date.now();
 }
 
 function normalizeProjectNoText(value?: string) {
@@ -90,6 +101,10 @@ function normalizeProjectNoText(value?: string) {
   return text;
 }
 
+function isPriorityProject(projectNo: string) {
+  return normalizeProjectNoText(projectNo) === 'J2B';
+}
+
 export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: SidebarProps) {
   const {
     projects,
@@ -98,6 +113,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
     setActiveProjectNo,
     stockItems,
     receivingRequests,
+    withdrawRecords,
   } = useInventory();
   const { userProfile, logout } = useAuth();
   const { activeRole } = useRole();
@@ -124,10 +140,76 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
       .filter((group) => group.items.length > 0);
   }, [activeRole]);
   const location = useLocation();
-  const miniProjects = useMemo(() => activeProjects, [activeProjects]);
+  const miniProjects = useMemo(
+    () => activeProjects.map((project, index) => ({ project, index })),
+    [activeProjects]
+  );
+  const priorityMiniProjects = useMemo(
+    () => miniProjects.filter(({ project }) => isPriorityProject(project.projectNo)),
+    [miniProjects]
+  );
+  const regularMiniProjects = useMemo(
+    () => miniProjects.filter(({ project }) => !isPriorityProject(project.projectNo)),
+    [miniProjects]
+  );
   const activeProject = activeProjects.find((project) => project.projectNo === activeProjectNo)
     ?? projects.find((project) => project.projectNo === activeProjectNo);
   const normalizedActiveProjectNo = normalizeProjectNoText(activeProjectNo);
+  const projectActionBadges = useMemo<Record<string, number>>(() => {
+    const counts = new Map<string, number>();
+
+    const increment = (projectNo: string) => {
+      const normalizedProjectNo = normalizeProjectNoText(projectNo);
+      if (!normalizedProjectNo) {
+        return;
+      }
+
+      counts.set(normalizedProjectNo, (counts.get(normalizedProjectNo) ?? 0) + 1);
+    };
+
+    receivingRequests.forEach((request) => {
+      const projectCode = normalizeProjectNoText(
+        request.cmgProjectCode ||
+          request.projectItemCode ||
+          request.projectNo ||
+          request.projectId ||
+          request.projectName ||
+          request.location
+      );
+
+      if (request.requestStatus === 'pending') {
+        increment(projectCode);
+      }
+    });
+
+    stockItems.forEach((item) => {
+      const projectCode = normalizeProjectNoText(
+        item.cmgProjectCode ||
+          item.projectId ||
+          item.purchasedForProject ||
+          item.location
+      );
+
+      if (item.status === 'In Transit') {
+        increment(projectCode);
+      }
+
+      if (
+        ['MasterAdmin', 'Store Center'].includes(activeRole) &&
+        item.status === 'Pending Dispatch'
+      ) {
+        increment(projectCode);
+      }
+    });
+
+    withdrawRecords.forEach((record) => {
+      if (record.type === 'borrow' && record.status !== 'Returned') {
+        increment(record.projectNo);
+      }
+    });
+
+    return Object.fromEntries(counts);
+  }, [activeRole, receivingRequests, stockItems, withdrawRecords]);
 
   const actionBadges = useMemo<Record<ActionMenuKey, { count: number; title: string }>>(() => {
     const isForActiveProject = (projectCode: string) =>
@@ -164,19 +246,69 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
       ).length
       : 0;
 
+    const waitingWithdrawReturnCount = withdrawRecords.filter((record) => {
+      const projectCode = normalizeProjectNoText(record.projectNo);
+      return record.type === 'borrow' && record.status !== 'Returned' && isForActiveProject(projectCode);
+    }).length;
+
+    const overdueWithdrawReturnCount = withdrawRecords.filter((record) => {
+      const projectCode = normalizeProjectNoText(record.projectNo);
+      return (
+        record.type === 'borrow' &&
+        record.status !== 'Returned' &&
+        isForActiveProject(projectCode) &&
+        isWithdrawOverdue(record.dueDate)
+      );
+    }).length;
+
     return {
       receiving: {
         count: pendingReceivingCount + incomingItemsCount,
         title: `Receiving รอ Action ${pendingReceivingCount + incomingItemsCount} รายการ: รับเข้าใหม่ ${pendingReceivingCount}, ย้ายโครงการ ${incomingItemsCount}`,
+      },
+      withdraw: {
+        count: waitingWithdrawReturnCount,
+        title: `Withdraw waiting return ${waitingWithdrawReturnCount} records, overdue ${overdueWithdrawReturnCount}`,
       },
       dispatch: {
         count: dispatchableCount,
         title: `Dispatch รอ Action ${dispatchableCount} รายการ`,
       },
     };
-  }, [activeProjectNo, activeRole, normalizedActiveProjectNo, receivingRequests, stockItems]);
+  }, [activeProjectNo, activeRole, normalizedActiveProjectNo, receivingRequests, stockItems, withdrawRecords]);
 
   const [pendingCount, setPendingCount] = useState(0);
+
+  const renderMiniProjectButton = (project: typeof activeProjects[number], index: number) => {
+    const badgeCount = projectActionBadges[normalizeProjectNoText(project.projectNo)] ?? 0;
+
+    return (
+      <div key={project.projectNo} className={styles.projectDotWrap}>
+        <button
+          className={`${styles.projectDot} ${
+            activeProjectNo === project.projectNo ? styles.projectActive : ''
+          } ${
+            activeProjectNo && activeProjectNo !== project.projectNo ? styles.projectInactive : ''
+          } ${styles[`projectTone${(index % 4) + 1}`]}`}
+          type="button"
+          title={`${project.projectNo} - ${project.projectName}`}
+          aria-label={`Switch to ${project.projectNo}${badgeCount > 0 ? ` (${badgeCount} pending items)` : ''}`}
+          aria-pressed={activeProjectNo === project.projectNo}
+          onClick={(e) => {
+            e.stopPropagation();
+            setActiveProjectNo(project.projectNo);
+          }}
+        >
+          {getMiniProjectLabel(project.projectNo)}
+        </button>
+        {badgeCount > 0 ? (
+          <span className={styles.projectBadge} aria-label={`${project.projectNo} has ${badgeCount} pending items`}>
+            {formatBadgeCount(badgeCount)}
+          </span>
+        ) : null}
+      </div>
+    );
+  };
 
   useEffect(() => {
     if (!userProfile || !userProfile.role.includes('MasterAdmin')) {
@@ -244,23 +376,19 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
         >
           <div className={styles.verticalBrand}>CMG.</div>
           <div className={styles.projectStack}>
-            {miniProjects.map((project, index) => (
-              <button
-                key={project.projectNo}
-                className={`${styles.projectDot} ${
-                  activeProjectNo === project.projectNo ? styles.projectActive : ''
-                } ${styles[`projectTone${(index % 4) + 1}`]}`}
-                type="button"
-                title={`${project.projectNo} - ${project.projectName}`}
-                aria-label={`Switch to ${project.projectNo}`}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setActiveProjectNo(project.projectNo);
-                }}
-              >
-                {getMiniProjectLabel(project.projectNo)}
-              </button>
-            ))}
+            {priorityMiniProjects.length > 0 ? (
+              <div className={styles.projectSection}>
+                {priorityMiniProjects.map(({ project, index }) => renderMiniProjectButton(project, index))}
+              </div>
+            ) : null}
+            {priorityMiniProjects.length > 0 && regularMiniProjects.length > 0 ? (
+              <div className={styles.projectDivider} aria-hidden="true" />
+            ) : null}
+            {regularMiniProjects.length > 0 ? (
+              <div className={styles.projectSection}>
+                {regularMiniProjects.map(({ project, index }) => renderMiniProjectButton(project, index))}
+              </div>
+            ) : null}
             {!['Store Center', 'Store Site', 'Keeper'].includes(activeRole) && (
               <NavLink
                 className={styles.addProject}

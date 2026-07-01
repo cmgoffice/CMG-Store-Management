@@ -5,6 +5,7 @@ import { SearchField } from '../components/SearchField';
 import { StatusBadge } from '../components/StatusBadge';
 import { useInventory } from '../context/InventoryContext';
 import { useRole } from '../context/RoleContext';
+import type { DispatchRecord } from '../types/models';
 import { getStockItemId } from '../utils/stockItem';
 import '../styles/tables.css';
 import styles from './DispatchPage.module.css';
@@ -92,6 +93,7 @@ export function DispatchPage() {
   const [dispatchQuantities, setDispatchQuantities] = useState<Record<string, string>>({});
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isItemPickerOpen, setIsItemPickerOpen] = useState(false);
+  const [selectedPendingReceipt, setSelectedPendingReceipt] = useState<DispatchRecord | null>(null);
   const [itemPickerQuery, setItemPickerQuery] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [uploadError, setUploadError] = useState('');
@@ -343,6 +345,14 @@ export function DispatchPage() {
     }
   };
 
+  const openPendingReceiptDetail = (record: DispatchRecord) => {
+    setSelectedPendingReceipt(record);
+  };
+
+  const closePendingReceiptDetail = () => {
+    setSelectedPendingReceipt(null);
+  };
+
   return (
     <div>
       <PageHeader
@@ -405,7 +415,19 @@ export function DispatchPage() {
             </thead>
             <tbody>
               {pendingReceipts.map((record) => (
-                <tr key={record.id}>
+                <tr
+                  key={record.id}
+                  className={styles.clickableRow}
+                  onClick={() => openPendingReceiptDetail(record)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      openPendingReceiptDetail(record);
+                    }
+                  }}
+                  tabIndex={0}
+                  aria-label={`Open dispatch ${record.dispatchNo} details`}
+                >
                   <td>
                     <span className={styles.dispatchCode}>{record.dispatchNo}</span>
                   </td>
@@ -749,6 +771,137 @@ export function DispatchPage() {
               </div>
             </div>
           ) : null}
+        </div>
+      ) : null}
+
+      {selectedPendingReceipt ? (
+        <div className={styles.modalOverlay}>
+          <div className={`${styles.modal} ${styles.detailModal}`}>
+            <div className={styles.modalHeader}>
+              <div>
+                <h3>Dispatch Details</h3>
+                <p>Review the dispatch waiting for receipt at the destination project.</p>
+              </div>
+              <button
+                type="button"
+                className={styles.iconButton}
+                onClick={closePendingReceiptDetail}
+                aria-label="Close dispatch details"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className={styles.modalBody}>
+              <div className={styles.detailHero}>
+                <div className={styles.modalInfo}>
+                  <span>Dispatch No.</span>
+                  <strong>{selectedPendingReceipt.dispatchNo}</strong>
+                </div>
+                <StatusBadge status={selectedPendingReceipt.status} />
+              </div>
+
+              <div className={styles.detailGrid}>
+                <div className={styles.detailCard}>
+                  <span>Route</span>
+                  <strong>
+                    {selectedPendingReceipt.sourceProjectNo || '-'} to {selectedPendingReceipt.destinationProjectNo || '-'}
+                  </strong>
+                  <p>
+                    {selectedPendingReceipt.sourceProjectName || 'Unknown source project'} to{' '}
+                    {selectedPendingReceipt.destinationProjectName || 'Unknown destination project'}
+                  </p>
+                </div>
+
+                <div className={styles.detailCard}>
+                  <span>Vehicle Plate</span>
+                  <strong>{selectedPendingReceipt.transport || '-'}</strong>
+                  <p>Dispatched at {formatDateTime(selectedPendingReceipt.dispatchedAt)}</p>
+                </div>
+
+                <div className={styles.detailCard}>
+                  <span>Sent By</span>
+                  <strong>{selectedPendingReceipt.dispatchedByName || '-'}</strong>
+                  <p>{selectedPendingReceipt.dispatchedByEmail || '-'}</p>
+                </div>
+
+                <div className={styles.detailCard}>
+                  <span>Total Qty</span>
+                  <strong>{selectedPendingReceipt.totalQty.toLocaleString()}</strong>
+                  <p>{selectedPendingReceipt.items.length.toLocaleString()} item line(s)</p>
+                </div>
+              </div>
+
+              <div className={styles.field}>
+                <span>Items</span>
+                <div className={styles.detailItemsTable}>
+                  <div className={styles.detailItemsHead}>
+                    <span>Receive No.</span>
+                    <span>PR / PO</span>
+                    <span>Item</span>
+                    <span>Qty</span>
+                    <span>Source Location</span>
+                  </div>
+                  <div className={styles.selectedItemsBody}>
+                    {selectedPendingReceipt.items.map((item) => (
+                      <div key={`${selectedPendingReceipt.id}-${item.stockReceiveNo}`} className={styles.detailItemRow}>
+                        <span>{item.receiveNo}</span>
+                        <span>
+                          {item.prNo || '-'}
+                          <small>{item.poNo || '-'}</small>
+                        </span>
+                        <span>
+                          {item.itemDescription || '-'}
+                          <small>{item.itemNo || '-'}</small>
+                        </span>
+                        <span>{item.qty.toLocaleString()}</span>
+                        <span>{item.sourceLocation || '-'}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className={styles.formGrid}>
+                <div className={styles.field}>
+                  <span>Remark / Note</span>
+                  <div className={styles.detailTextBlock}>
+                    {selectedPendingReceipt.note?.trim() || 'No remark provided.'}
+                  </div>
+                </div>
+
+                <div className={styles.field}>
+                  <span>Attachments</span>
+                  {selectedPendingReceipt.photoUrls.length > 0 ? (
+                    <div className={styles.photoList}>
+                      {selectedPendingReceipt.photoUrls.map((url, index) => (
+                        <a
+                          key={`${selectedPendingReceipt.id}-detail-${index}`}
+                          href={url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className={styles.photoLink}
+                        >
+                          Photo {index + 1}
+                        </a>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className={styles.detailTextBlock}>No photo attached.</div>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className={styles.modalFooter}>
+              <div className={styles.selectionNote}>
+                Waiting for receipt by Project {selectedPendingReceipt.destinationProjectNo || '-'}
+              </div>
+              <button type="button" className={styles.primaryButton} onClick={closePendingReceiptDetail}>
+                Close
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </div>

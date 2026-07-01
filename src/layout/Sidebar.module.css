@@ -65,6 +65,26 @@
   scrollbar-width: none;
 }
 
+.projectSection {
+  display: grid;
+  width: 100%;
+  justify-items: center;
+  gap: 14px;
+}
+
+.projectDotWrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.projectDivider {
+  width: 26px;
+  height: 1px;
+  margin: 2px 0;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 24%);
+}
+
 .projectStack::-webkit-scrollbar {
   display: none;
 }
@@ -82,12 +102,42 @@
   font-size: 12px;
   font-weight: 800;
   line-height: 1;
+  overflow: hidden;
   box-shadow: 0 12px 18px rgb(35 19 120 / 18%);
-  transition: transform 160ms ease, box-shadow 160ms ease, outline-color 160ms ease;
+  transition:
+    transform 160ms ease,
+    box-shadow 160ms ease,
+    outline-color 160ms ease,
+    opacity 160ms ease,
+    filter 160ms ease;
 }
 
 .projectDot {
   padding: 0;
+  backface-visibility: hidden;
+  transform: translateZ(0);
+}
+
+.projectBadge {
+  position: absolute;
+  top: -6px;
+  right: -7px;
+  z-index: 3;
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  border: 2px solid #6e42f4;
+  border-radius: 999px;
+  background: #8b1e1e;
+  color: #fff7f7;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1;
+  box-shadow: 0 6px 14px rgb(139 30 30 / 28%);
+  pointer-events: none;
 }
 
 .projectDot:hover,
@@ -105,7 +155,40 @@
 }
 
 .projectActive {
-  outline: 3px solid rgb(255 255 255 / 18%);
+  position: relative;
+  transform: translateZ(0);
+  box-shadow:
+    0 16px 28px rgb(35 19 120 / 38%),
+    0 0 0 3px rgb(255 255 255 / 18%),
+    inset 0 1px 0 rgb(255 255 255 / 26%);
+  filter: saturate(1.18) brightness(1.08);
+  z-index: 1;
+}
+
+.projectActive::after {
+  position: absolute;
+  right: -5px;
+  top: -5px;
+  width: 10px;
+  height: 10px;
+  border: 2px solid rgb(110 66 244 / 72%);
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 0 0 4px rgb(255 255 255 / 20%);
+  content: '';
+}
+
+.projectInactive {
+  opacity: 0.4;
+  transform: scale(0.7) translateZ(0);
+  filter: saturate(0.72) brightness(0.9);
+}
+
+.projectInactive:hover,
+.projectInactive:focus-visible {
+  opacity: 0.72;
+  transform: scale(0.78) translateZ(0);
+  filter: saturate(0.92) brightness(0.98);
 }
 
 .projectTone1 {
@@ -248,12 +331,12 @@
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  background: #ffde59;
-  color: #533700;
+  background: #8b1e1e;
+  color: #fff7f7;
   font-weight: 900;
   line-height: 1;
   text-align: center;
-  box-shadow: 0 8px 18px rgb(255 222 89 / 22%);
+  box-shadow: 0 8px 18px rgb(139 30 30 / 26%);
 }
 
 .groupBadge {
@@ -311,7 +394,7 @@
   font-weight: 600;
   letter-spacing: 0.02em;
   line-height: 18px;
-  padding: 8px 16px 8px 34px;
+  padding: 8px 22px 8px 34px;
   text-transform: uppercase;
   transition: color 160ms ease;
 }
@@ -359,10 +442,13 @@
 }
 
 .menuBadge {
+  position: relative;
+  z-index: 1;
   flex-shrink: 0;
   min-width: 18px;
   height: 18px;
   margin-left: auto;
+  margin-right: 8px;
   padding: 0 5px;
   font-size: 9px;
 }
@@ -588,11 +674,11 @@
   height: 18px;
   padding: 0 5px;
   border-radius: 999px;
-  background-color: var(--color-error, #ba1a1a);
-  color: white;
+  background-color: #8b1e1e;
+  color: #fff7f7;
   font-size: 9px;
   font-weight: 800;
   line-height: 1;
   text-align: center;
-  box-shadow: 0 2px 8px rgba(186, 26, 26, 0.4);
+  box-shadow: 0 2px 8px rgb(139 30 30 / 0.4);
 }

@@ -1,8 +1,13 @@
-import type { DispatchRecordStatus, ReceivingRequestStatus, StockStatus } from '../types/models';
+import type {
+  DispatchRecordStatus,
+  ReceivingRequestStatus,
+  StockStatus,
+  WithdrawRecordStatus,
+} from '../types/models';
 import styles from './StatusBadge.module.css';
 
 interface StatusBadgeProps {
-  status: StockStatus | DispatchRecordStatus | ReceivingRequestStatus;
+  status: StockStatus | DispatchRecordStatus | ReceivingRequestStatus | WithdrawRecordStatus;
 }
 
 function formatStatusLabel(status: StatusBadgeProps['status']) {
@@ -15,11 +20,18 @@ function formatStatusLabel(status: StatusBadgeProps['status']) {
 
 export function StatusBadge({ status }: StatusBadgeProps) {
   const className =
-    status === 'Pending Dispatch' || status === 'Pending Receipt' || status === 'pending'
+    status === 'Pending Dispatch' ||
+    status === 'Pending Receipt' ||
+    status === 'Waiting Return' ||
+    status === 'pending'
       ? styles.pending
-      : status === 'In Transit'
+      : status === 'In Transit' || status === 'Borrowed'
         ? styles.transit
-        : styles.received;
+        : status === 'Overdue'
+          ? styles.overdue
+          : status === 'Issued' || status === 'Withdrawn'
+            ? styles.neutral
+            : styles.received;
 
   return <span className={`${styles.badge} ${className}`}>{formatStatusLabel(status)}</span>;
 }

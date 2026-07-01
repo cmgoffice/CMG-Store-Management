@@ -415,7 +415,6 @@ export function StockListPage() {
           <thead>
             <tr>
               <th className={styles.noColumn}>No</th>
-              <th className={styles.locationColumn}>Current Location</th>
               <th className={styles.itemSummaryColumn}>Item Summary</th>
               {projectQtyColumns.map((project) => (
                 <th
@@ -442,9 +441,6 @@ export function StockListPage() {
                     onClick={() => handleToggleExpand(item.id)}
                   >
                     <td className={styles.noColumn}>{index + 1}</td>
-                    <td className={styles.locationCell} title={item.location}>
-                      {item.location}
-                    </td>
                     <td className={styles.itemSummaryCell}>
                       <button
                         type="button"
@@ -491,7 +487,7 @@ export function StockListPage() {
                   </tr>
                   {isExpanded ? (
                     <tr className={styles.detailRow}>
-                      <td colSpan={6 + projectQtyColumns.length}>
+                      <td colSpan={5 + projectQtyColumns.length}>
                         <div className={styles.detailPanel}>
                           <table className={styles.detailTable}>
                             <thead>
@@ -501,7 +497,7 @@ export function StockListPage() {
                                 <th>Receive Date</th>
                                 <th>PR No.</th>
                                 <th>Received By</th>
-                                <th className="numeric">Qty</th>
+                                <th className={`numeric ${styles.detailQtyColumn}`}>Qty</th>
                                 <th className="numeric">Amount</th>
                               </tr>
                             </thead>
@@ -513,7 +509,9 @@ export function StockListPage() {
                                   <td>{historyItem.receiveDate}</td>
                                   <td>{historyItem.prNo}</td>
                                   <td>{historyItem.receivedByName}</td>
-                                  <td className="numeric">{historyItem.qty.toLocaleString()}</td>
+                                  <td className={`numeric ${styles.detailQtyColumn}`}>
+                                    {historyItem.qty.toLocaleString()}
+                                  </td>
                                   <td className="numeric">{historyItem.amount.toLocaleString()}</td>
                                 </tr>
                               ))}
@@ -529,7 +527,7 @@ export function StockListPage() {
             {filteredItems.length === 0 && (
               <tr>
                 <td
-                  colSpan={6 + projectQtyColumns.length}
+                  colSpan={5 + projectQtyColumns.length}
                   className="text-center py-6 text-slate-400 font-semibold text-sm"
                 >
                   No inventory items match the current filters.

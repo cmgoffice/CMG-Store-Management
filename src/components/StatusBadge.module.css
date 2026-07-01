@@ -20,6 +20,16 @@
   color: #0078d4;
 }
 
+.overdue {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.neutral {
+  background: #f3f4f6;
+  color: #475569;
+}
+
 .received {
   background: #edf7ed;
   color: #107c10;

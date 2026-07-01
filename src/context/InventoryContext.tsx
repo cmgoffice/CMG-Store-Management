@@ -29,6 +29,9 @@ import type {
   ReceivingRequestItem,
   ReceivingRequestStatus,
   StockItem,
+  WithdrawRecord,
+  WithdrawRecordStatus,
+  WithdrawType,
 } from '../types/models';
 import { getStockItemId } from '../utils/stockItem';
 import { useAuth } from './AuthContext';
@@ -47,17 +50,42 @@ interface CreateDispatchInput {
   photos: File[];
 }
 
+interface ReceiveDispatchLineInput {
+  stockReceiveNo: string;
+  receivedQty: number;
+}
+
+interface CreateWithdrawLineInput {
+  receiveNo: string;
+  qty: number;
+}
+
+interface CreateWithdrawInput {
+  projectNo: string;
+  type: WithdrawType;
+  items: CreateWithdrawLineInput[];
+  requesterName: string;
+  requesterPhone: string;
+  withdrawDate: string;
+  purpose: string;
+  dueDate?: string;
+  photos: File[];
+}
+
 interface InventoryContextValue {
   projects: Project[];
   activeProjects: Project[];
   stockItems: StockItem[];
   receivingRequests: ReceivingRequest[];
   dispatchRecords: DispatchRecord[];
+  withdrawRecords: WithdrawRecord[];
   updateProjectStatus: (projectNo: string, status: ProjectStatus) => Promise<void>;
   createDispatch: (input: CreateDispatchInput) => Promise<void>;
+  createWithdraw: (input: CreateWithdrawInput) => Promise<void>;
+  returnWithdraw: (withdrawId: string) => Promise<void>;
   approveReceipt: (receiveNo: string) => Promise<void>;
   approveReceivingRequest: (requestId: string) => Promise<void>;
-  receiveDispatch: (dispatchId: string) => Promise<void>;
+  receiveDispatch: (dispatchId: string, receivedItems?: ReceiveDispatchLineInput[]) => Promise<void>;
   receiveNewItem: (item: StockItem) => Promise<void>;
   receivePrPoPayload: (payload: PrPoReceivePayload) => Promise<PrPoReceiveResponse>;
   activeProjectNo: string;
@@ -101,6 +129,28 @@ function normalizeReceivingRequestStatus(value: unknown): ReceivingRequestStatus
   return 'pending';
 }
 
+function normalizeWithdrawType(value: unknown): WithdrawType {
+  return String(value || '').trim().toLowerCase() === 'borrow' ? 'borrow' : 'issue';
+}
+
+function normalizeWithdrawRecordStatus(value: unknown): WithdrawRecordStatus {
+  const normalized = String(value || '').trim().toLowerCase();
+
+  if (normalized === 'waiting return' || normalized === 'waiting_return' || normalized === 'borrowed') {
+    return 'Waiting Return';
+  }
+
+  if (normalized === 'overdue') {
+    return 'Overdue';
+  }
+
+  if (normalized === 'returned') {
+    return 'Returned';
+  }
+
+  return 'Issued';
+}
+
 function formatPersonName(firstName?: string, lastName?: string, fallback = 'Unknown User') {
   const fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
   return fullName || fallback;
@@ -127,6 +177,23 @@ function createDispatchNumber() {
   const min = String(now.getMinutes()).padStart(2, '0');
   const ss = String(now.getSeconds()).padStart(2, '0');
   return `DSP-${yyyy}${mm}${dd}-${hh}${min}${ss}`;
+}
+
+function getProjectShortNo(projectNo: string) {
+  const compactProjectNo = normalizeProjectNoText(projectNo).replace(/[^a-zA-Z0-9]+/g, '');
+  return compactProjectNo.slice(-5) || 'PROJECT';
+}
+
+function createWithdrawNumber(projectNo: string) {
+  const now = new Date();
+  const yyyy = now.getFullYear();
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const dd = String(now.getDate()).padStart(2, '0');
+  const hh = String(now.getHours()).padStart(2, '0');
+  const min = String(now.getMinutes()).padStart(2, '0');
+  const ss = String(now.getSeconds()).padStart(2, '0');
+  const ms = String(now.getMilliseconds()).padStart(3, '0');
+  return `${getProjectShortNo(projectNo)}-WD-${yyyy}${mm}${dd}-${hh}${min}${ss}${ms}`;
 }
 
 function createProjectLabel(projectNo: string) {
@@ -215,6 +282,26 @@ function normalizeStringArray(value: unknown) {
 
 function normalizeBoolean(value: unknown) {
   return value === true || String(value).trim().toLowerCase() === 'true';
+}
+
+function stripUndefined<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => stripUndefined(item)) as T;
+  }
+
+  if (
+    value &&
+    typeof value === 'object' &&
+    (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
+  ) {
+    return Object.fromEntries(
+      Object.entries(value)
+        .filter(([, entryValue]) => entryValue !== undefined)
+        .map(([entryKey, entryValue]) => [entryKey, stripUndefined(entryValue)]),
+    ) as T;
+  }
+
+  return value;
 }
 
 function normalizeProjectNoText(value: unknown) {
@@ -433,6 +520,72 @@ function normalizeStockItem(data: DocumentData, fallbackId: string): StockItem {
   };
 }
 
+function normalizeWithdrawRecord(data: DocumentData, fallbackId: string): WithdrawRecord {
+  const type = normalizeWithdrawType(data.type);
+  const rawItems = parseReceivingItems(data.items);
+  const projectNo = normalizeProjectNoText(data.projectNo);
+  const withdrawNo = normalizeText(data.withdrawNo) || fallbackId;
+  const items = rawItems.map((item, index) => {
+    const itemData = item as DocumentData;
+    const stockItemSnapshot =
+      itemData.stockItemSnapshot &&
+      typeof itemData.stockItemSnapshot === 'object' &&
+      !Array.isArray(itemData.stockItemSnapshot)
+        ? normalizeStockItem(itemData.stockItemSnapshot as DocumentData, normalizeText(itemData.stockItemId) || normalizeText(itemData.receiveNo) || `${fallbackId}-${index + 1}`)
+        : undefined;
+
+    const receiveNo = normalizeText(itemData.receiveNo) || stockItemSnapshot?.receiveNo || `${withdrawNo}-${index + 1}`;
+    const stockItemId = normalizeText(itemData.stockItemId) || stockItemSnapshot?.stockItemId || receiveNo;
+
+    return {
+      stockItemId,
+      receiveNo,
+      prNo: normalizeText(itemData.prNo) || stockItemSnapshot?.prNo || '',
+      poNo: normalizeText(itemData.poNo) || stockItemSnapshot?.poNo || '',
+      itemNo: normalizeText(itemData.itemNo) || stockItemSnapshot?.itemNo || stockItemId,
+      itemDescription: normalizeText(itemData.itemDescription) || stockItemSnapshot?.itemDescription || '',
+      qty: normalizeNumber(itemData.qty),
+      returnedQty:
+        itemData.returnedQty === undefined || itemData.returnedQty === null
+          ? undefined
+          : normalizeNumber(itemData.returnedQty),
+      amount: normalizeNumber(itemData.amount),
+      unit: normalizeText(itemData.unit) || stockItemSnapshot?.unit,
+      vendorName: normalizeText(itemData.vendorName) || stockItemSnapshot?.vendorName || '',
+      sourceLocation: normalizeText(itemData.sourceLocation) || stockItemSnapshot?.location || '',
+      originalStatus: (normalizeText(itemData.originalStatus) as StockItem['status']) || stockItemSnapshot?.status || 'Received at Site',
+      stockItemSnapshot,
+    };
+  });
+
+  return {
+    id: normalizeText(data.id) || fallbackId,
+    withdrawNo,
+    projectNo,
+    projectShortNo: normalizeText(data.projectShortNo) || getProjectShortNo(projectNo),
+    projectName: normalizeText(data.projectName),
+    type,
+    status: normalizeWithdrawRecordStatus(data.status),
+    requesterName: normalizeText(data.requesterName),
+    requesterPhone: normalizeText(data.requesterPhone),
+    issuedByUid: normalizeText(data.issuedByUid),
+    issuedByName: normalizeText(data.issuedByName),
+    issuedByEmail: normalizeText(data.issuedByEmail),
+    withdrawDate: normalizeDateText(data.withdrawDate) || normalizeDateText(data.createdAt),
+    purpose: normalizeText(data.purpose),
+    dueDate: normalizeDateText(data.dueDate),
+    returnedAt: normalizeDateText(data.returnedAt),
+    returnedByUid: normalizeText(data.returnedByUid),
+    returnedByName: normalizeText(data.returnedByName),
+    returnedByEmail: normalizeText(data.returnedByEmail),
+    itemReceiveNos: normalizeStringArray(data.itemReceiveNos),
+    items,
+    totalQty: normalizeNumber(data.totalQty, items.reduce((sum, item) => sum + item.qty, 0)),
+    photoUrls: normalizeStringArray(data.photoUrls),
+    createdAt: normalizeDateText(data.createdAt) || normalizeDateText(data.withdrawDate) || new Date().toISOString(),
+  };
+}
+
 function normalizeLocalProject(data: Partial<Project>, fallbackId: string): Project | null {
   const projectNo = normalizeText(data.projectNo) || normalizeText((data as { jobNo?: string }).jobNo) || fallbackId;
   if (!projectNo) {
@@ -509,6 +662,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
   const [masterProjects, setMasterProjects] = useState<Project[]>([]);
   const [projectStatuses, setProjectStatuses] = useState<Record<string, ProjectStatus>>({});
   const [dispatchList, setDispatchList] = useState<DispatchRecord[]>([]);
+  const [withdrawList, setWithdrawList] = useState<WithdrawRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeProjectNo, setActiveProjectNo] = useState<string>('');
   const projectList = useMemo(
@@ -522,6 +676,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     let unsubProjectStatuses = () => {};
     let unsubStock = () => {};
     let unsubDispatch = () => {};
+    let unsubWithdraw = () => {};
     let unsubReceivingRequests = () => {};
 
     const projectsColRef = collection(db, APP_NAME, 'root', 'projects');
@@ -615,6 +770,20 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       }
     );
 
+    const withdrawColRef = collection(db, APP_NAME, 'root', 'withdrawRecords');
+    unsubWithdraw = onSnapshot(
+      withdrawColRef,
+      (snapshot) => {
+        const loadedRecords = snapshot.docs.map((d) => normalizeWithdrawRecord(d.data(), d.id));
+        loadedRecords.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setWithdrawList(loadedRecords);
+      },
+      (error) => {
+        console.error('Failed to listen to withdraw updates:', error);
+        setWithdrawList([]);
+      }
+    );
+
     const receivingRequestsColRef = collection(db, APP_NAME, 'root', 'receivingRequests');
     unsubReceivingRequests = onSnapshot(
       receivingRequestsColRef,
@@ -635,6 +804,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       unsubProjectStatuses();
       unsubStock();
       unsubDispatch();
+      unsubWithdraw();
       unsubReceivingRequests();
     };
   }, []);
@@ -679,6 +849,24 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         assigned.has(record.destinationProjectNo)
     );
   }, [dispatchList, userProfile]);
+
+  const visibleWithdrawRecords = useMemo(() => {
+    if (!userProfile) {
+      return [];
+    }
+
+    if (
+      userProfile.role.includes('MasterAdmin') ||
+      userProfile.role.includes('Store Center')
+    ) {
+      return withdrawList;
+    }
+
+    const assigned = userProfile.assignedProjects || [];
+    return withdrawList.filter((record) =>
+      assigned.some((projectNo) => projectNoMatches(projectNo, record.projectNo))
+    );
+  }, [userProfile, withdrawList]);
 
   useEffect(() => {
     if (activeVisibleProjects.length > 0) {
@@ -852,20 +1040,281 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         status: 'In Transit',
       };
 
-      batch.set(dispatchedItemRef, dispatchedItem);
+      batch.set(dispatchedItemRef, stripUndefined(dispatchedItem));
     });
 
     const dispatchRef = doc(db, APP_NAME, 'root', 'dispatchRecords', dispatchId);
-    batch.set(dispatchRef, record);
+    batch.set(dispatchRef, stripUndefined(record));
     await batch.commit();
   }, [items, projectList, userProfile]);
 
-  const receiveDispatch = useCallback(async (dispatchId: string) => {
+  const createWithdraw = useCallback(async ({
+    projectNo,
+    type,
+    items: selectedLines,
+    requesterName,
+    requesterPhone,
+    withdrawDate,
+    purpose,
+    dueDate,
+    photos,
+  }: CreateWithdrawInput) => {
+    const normalizedProjectNo = normalizeProjectNoText(projectNo);
+    const normalizedType = normalizeWithdrawType(type);
+    const normalizedLines = selectedLines
+      .map((line) => ({
+        receiveNo: line.receiveNo,
+        qty: Number(line.qty),
+      }))
+      .filter((line) => line.receiveNo && Number.isFinite(line.qty) && line.qty > 0);
+
+    if (!normalizedProjectNo) {
+      throw new Error('Please select an active project before creating a withdrawal.');
+    }
+
+    const sourceProject = visibleProjects.find((project) => projectNoMatches(project.projectNo, normalizedProjectNo));
+    if (!sourceProject) {
+      throw new Error('You can create withdrawals only for projects assigned to your account.');
+    }
+
+    if (!requesterName.trim()) {
+      throw new Error('Please enter the requester or responsible person.');
+    }
+
+    if (!requesterPhone.trim()) {
+      throw new Error('Please enter the requester phone number.');
+    }
+
+    if (!withdrawDate.trim()) {
+      throw new Error('Please select the withdrawal date.');
+    }
+
+    if (!purpose.trim()) {
+      throw new Error('Please enter the withdrawal purpose.');
+    }
+
+    if (normalizedType === 'borrow' && !dueDate?.trim()) {
+      throw new Error('Please select the return due date for borrowed items.');
+    }
+
+    if (!normalizedLines.length) {
+      throw new Error('Please select at least one item and enter withdraw qty greater than 0.');
+    }
+
+    const selectedItems = normalizedLines.map((line) => {
+      const sourceItem = items.find((item) => getStockItemId(item) === line.receiveNo);
+      const sourceItemProjectNo = sourceItem ? getStockItemProjectNo(sourceItem) : '';
+
+      if (!sourceItem) {
+        throw new Error(`Item ${line.receiveNo} could not be found. Please refresh and try again.`);
+      }
+
+      if (sourceItemProjectNo !== normalizedProjectNo) {
+        throw new Error(`Item ${sourceItem.receiveNo} is not in the active project store.`);
+      }
+
+      if (
+        sourceItem.qty <= 0 ||
+        sourceItem.status === 'In Transit' ||
+        sourceItem.status === 'Borrowed' ||
+        sourceItem.status === 'Withdrawn'
+      ) {
+        throw new Error(`Item ${sourceItem.receiveNo} is not available for withdrawal.`);
+      }
+
+      if (line.qty > sourceItem.qty) {
+        throw new Error(`Withdraw qty for ${sourceItem.receiveNo} is greater than available qty.`);
+      }
+
+      return {
+        line,
+        sourceItem,
+      };
+    });
+
+    const withdrawNo = createWithdrawNumber(sourceProject.projectNo);
+    const withdrawId = withdrawNo;
+    const createdAt = new Date().toISOString();
+    const issuedByName = formatPersonName(
+      userProfile?.firstName,
+      userProfile?.lastName,
+      userProfile?.email ?? 'Store Issuer'
+    );
+    const issuedByEmail = userProfile?.email ?? 'unknown@cmg.local';
+    const issuedByUid = userProfile?.uid ?? '';
+    const photoUrls = await Promise.all(
+      photos.map(async (photo, index) => {
+        const storageRef = ref(
+          storage,
+          `withdrawRecords/${withdrawNo}/${String(index + 1).padStart(2, '0')}-${sanitizeFileName(photo.name)}`
+        );
+        await uploadBytes(storageRef, photo);
+        return getDownloadURL(storageRef);
+      })
+    );
+
+    const withdrawSnapshots = selectedItems.map(({ line, sourceItem }) => {
+      const stockItemId = getStockItemId(sourceItem);
+      const withdrawAmount = calculatePartialAmount(sourceItem.amount, sourceItem.qty, line.qty);
+
+      return {
+        stockItemId,
+        receiveNo: sourceItem.receiveNo,
+        prNo: sourceItem.prNo,
+        poNo: sourceItem.poNo,
+        itemNo: sourceItem.itemNo,
+        itemDescription: sourceItem.itemDescription,
+        qty: line.qty,
+        returnedQty: normalizedType === 'borrow' ? 0 : undefined,
+        amount: withdrawAmount,
+        unit: sourceItem.unit,
+        vendorName: sourceItem.vendorName,
+        sourceLocation: sourceItem.location,
+        originalStatus: sourceItem.status,
+        stockItemSnapshot: sourceItem,
+      };
+    });
+
+    const record: WithdrawRecord = {
+      id: withdrawId,
+      withdrawNo,
+      projectNo: sourceProject.projectNo,
+      projectShortNo: getProjectShortNo(sourceProject.projectNo),
+      projectName: sourceProject.projectName,
+      type: normalizedType,
+      status: normalizedType === 'borrow' ? 'Waiting Return' : 'Issued',
+      requesterName: requesterName.trim(),
+      requesterPhone: requesterPhone.trim(),
+      issuedByUid,
+      issuedByName,
+      issuedByEmail,
+      withdrawDate: withdrawDate.trim(),
+      purpose: purpose.trim(),
+      dueDate: normalizedType === 'borrow' ? dueDate?.trim() : undefined,
+      itemReceiveNos: withdrawSnapshots.map((item) => item.stockItemId),
+      items: withdrawSnapshots,
+      totalQty: withdrawSnapshots.reduce((sum, item) => sum + item.qty, 0),
+      photoUrls,
+      createdAt,
+    };
+
+    const batch = writeBatch(db);
+    selectedItems.forEach(({ line, sourceItem }) => {
+      const sourceRef = doc(db, APP_NAME, 'root', 'stockItems', getStockItemId(sourceItem));
+      const withdrawnAmount = calculatePartialAmount(sourceItem.amount, sourceItem.qty, line.qty);
+      const remainingQty = sourceItem.qty - line.qty;
+      const remainingAmount = roundAmount(sourceItem.amount - withdrawnAmount);
+
+      batch.update(sourceRef, {
+        qty: Math.max(0, remainingQty),
+        amount: Math.max(0, remainingAmount),
+        status:
+          remainingQty <= 0
+            ? normalizedType === 'borrow'
+              ? 'Borrowed'
+              : 'Withdrawn'
+            : sourceItem.status,
+        lastWithdrawNo: withdrawNo,
+        lastWithdrawAt: createdAt,
+      });
+    });
+
+    const withdrawRef = doc(db, APP_NAME, 'root', 'withdrawRecords', withdrawId);
+    batch.set(withdrawRef, stripUndefined(record));
+    await batch.commit();
+  }, [items, userProfile, visibleProjects]);
+
+  const returnWithdraw = useCallback(async (withdrawId: string) => {
+    const target = withdrawList.find((record) => record.id === withdrawId);
+
+    if (!target || target.type !== 'borrow' || target.status === 'Returned') {
+      return;
+    }
+
+    const returnedAt = new Date().toISOString();
+    const returnedByName = formatPersonName(
+      userProfile?.firstName,
+      userProfile?.lastName,
+      userProfile?.email ?? 'Store Receiver'
+    );
+    const returnedByEmail = userProfile?.email ?? 'unknown@cmg.local';
+    const returnedByUid = userProfile?.uid ?? '';
+    const batch = writeBatch(db);
+    const returnedItems = target.items.map((item) => {
+      const sourceRef = doc(db, APP_NAME, 'root', 'stockItems', item.stockItemId);
+      const existingStockItem = items.find((stockItem) => getStockItemId(stockItem) === item.stockItemId);
+      const restoredStatus =
+        item.originalStatus === 'Borrowed' || item.originalStatus === 'Withdrawn'
+          ? 'Received at Site'
+          : item.originalStatus;
+
+      if (existingStockItem) {
+        batch.set(
+          sourceRef,
+          stripUndefined({
+            qty: existingStockItem.qty + item.qty,
+            amount: roundAmount(existingStockItem.amount + item.amount),
+            status:
+              existingStockItem.status === 'Borrowed' ||
+              existingStockItem.status === 'Withdrawn' ||
+              existingStockItem.qty <= 0
+                ? restoredStatus
+                : existingStockItem.status,
+            lastReturnedWithdrawNo: target.withdrawNo,
+            lastReturnedAt: returnedAt,
+          }),
+          { merge: true }
+        );
+      } else if (item.stockItemSnapshot) {
+        batch.set(
+          sourceRef,
+          stripUndefined({
+            ...item.stockItemSnapshot,
+            stockItemId: item.stockItemId,
+            receiveNo: item.receiveNo,
+            qty: item.qty,
+            amount: item.amount,
+            status: restoredStatus,
+            location: item.sourceLocation || item.stockItemSnapshot.location,
+            lastReturnedWithdrawNo: target.withdrawNo,
+            lastReturnedAt: returnedAt,
+          })
+        );
+      } else {
+        throw new Error(`Original stock item ${item.receiveNo} could not be restored. Please contact admin.`);
+      }
+
+      return {
+        ...item,
+        returnedQty: item.qty,
+      };
+    });
+
+    const withdrawRef = doc(db, APP_NAME, 'root', 'withdrawRecords', target.id);
+    batch.set(
+      withdrawRef,
+      stripUndefined({
+        status: 'Returned',
+        returnedAt,
+        returnedByUid,
+        returnedByName,
+        returnedByEmail,
+        items: returnedItems,
+      }),
+      { merge: true }
+    );
+    await batch.commit();
+  }, [items, userProfile, withdrawList]);
+
+  const receiveDispatch = useCallback(async (dispatchId: string, receivedItems?: ReceiveDispatchLineInput[]) => {
     const target = dispatchList.find((record) => record.id === dispatchId);
     if (!target || target.status === 'Received at Site') {
       return;
     }
 
+    const receivedQtyByItem = new Map(
+      (receivedItems ?? []).map((item) => [item.stockReceiveNo, Math.max(0, Math.floor(item.receivedQty))])
+    );
     const receivedAt = new Date().toISOString();
     const receivedByName = formatPersonName(
       userProfile?.firstName,
@@ -876,29 +1325,65 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     const receivedByUid = userProfile?.uid ?? '';
 
     const batch = writeBatch(db);
-    target.itemReceiveNos.forEach((receiveNo) => {
-      const docRef = doc(db, APP_NAME, 'root', 'stockItems', receiveNo);
-      batch.update(docRef, {
-        status: 'Received at Site',
-        location: createProjectStoreLocation(target.destinationProjectNo),
-        purchasedForProject: createProjectLabel(target.destinationProjectNo),
-        receiveName: receivedByName,
-        receivedByUid,
-        receivedByName,
-        receivedByEmail,
-        lastReceivedAt: receivedAt,
-      });
+    let totalReceivedQty = 0;
+    const receivedSnapshots = target.items.map((item) => {
+      const sourceStockItem = items.find((stockItem) => getStockItemId(stockItem) === item.stockReceiveNo);
+      const requestedQty = item.qty;
+      const receivedQty = Math.min(
+        requestedQty,
+        receivedQtyByItem.get(item.stockReceiveNo) ?? requestedQty
+      );
+      const docRef = doc(db, APP_NAME, 'root', 'stockItems', item.stockReceiveNo);
+
+      if (receivedQty <= 0) {
+        batch.delete(docRef);
+        return {
+          ...item,
+          receivedQty: 0,
+        };
+      }
+
+      totalReceivedQty += receivedQty;
+      batch.set(
+        docRef,
+        stripUndefined({
+          qty: receivedQty,
+          amount: sourceStockItem
+            ? calculatePartialAmount(sourceStockItem.amount, sourceStockItem.qty, receivedQty)
+            : undefined,
+          status: 'Received at Site',
+          location: createProjectStoreLocation(target.destinationProjectNo),
+          purchasedForProject: createProjectLabel(target.destinationProjectNo),
+          receiveName: receivedByName,
+          receivedByUid,
+          receivedByName,
+          receivedByEmail,
+          lastReceivedAt: receivedAt,
+        }),
+        { merge: true }
+      );
+
+      return {
+        ...item,
+        receivedQty,
+      };
     });
 
     const dispatchRef = doc(db, APP_NAME, 'root', 'dispatchRecords', dispatchId);
-    batch.update(dispatchRef, {
-      status: 'Received at Site',
-      receivedAt,
-      receivedByName,
-      receivedByEmail,
-    });
+    batch.set(
+      dispatchRef,
+      {
+        status: 'Received at Site',
+        receivedAt,
+        receivedByName,
+        receivedByEmail,
+        items: receivedSnapshots,
+        totalReceivedQty,
+      },
+      { merge: true }
+    );
     await batch.commit();
-  }, [dispatchList, userProfile]);
+  }, [dispatchList, items, userProfile]);
 
   const approveReceivingRequest = useCallback(async (requestId: string) => {
     const target = receivingRequestList.find(
@@ -1011,7 +1496,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     const stockItemId = getStockItemId(item);
     const docRef = doc(db, APP_NAME, 'root', 'stockItems', stockItemId);
     const receiver = createReceivedBySnapshot(userProfile, 'Store Receiver');
-    await setDoc(docRef, {
+    await setDoc(docRef, stripUndefined({
       ...item,
       stockItemId,
       receiveName: item.receiveName || receiver.receivedByName,
@@ -1019,7 +1504,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       receivedByName: item.receivedByName || receiver.receivedByName,
       receivedByEmail: item.receivedByEmail || receiver.receivedByEmail,
       lastReceivedAt: item.lastReceivedAt || item.receiveDate || new Date().toISOString(),
-    });
+    }));
   }, [userProfile]);
 
   const receivePrPoPayload = useCallback(async (payload: PrPoReceivePayload) => {
@@ -1052,8 +1537,11 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       stockItems: items,
       receivingRequests: receivingRequestList,
       dispatchRecords: visibleDispatchRecords,
+      withdrawRecords: visibleWithdrawRecords,
       updateProjectStatus,
       createDispatch,
+      createWithdraw,
+      returnWithdraw,
       approveReceipt,
       approveReceivingRequest,
       receiveDispatch,
@@ -1067,14 +1555,17 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       approveReceivingRequest,
       approveReceipt,
       createDispatch,
+      createWithdraw,
       items,
       receivingRequestList,
       receiveDispatch,
       receiveNewItem,
       receivePrPoPayload,
+      returnWithdraw,
       updateProjectStatus,
       activeVisibleProjects,
       visibleDispatchRecords,
+      visibleWithdrawRecords,
       visibleProjects,
     ]
   );

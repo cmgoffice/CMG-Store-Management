@@ -13,6 +13,7 @@ type StoreReceiveHistory = {
   id: string;
   receiveDate: string;
   prNo: string;
+  form: string;
   receivedByName: string;
   qty: number;
   amount: number;
@@ -139,6 +140,7 @@ export function StorePage() {
   const {
     stockItems,
     receivingRequests,
+    dispatchRecords,
     activeProjectNo,
   } = useInventory();
   const [query, setQuery] = useState('');
@@ -150,6 +152,7 @@ export function StorePage() {
     const requestByKey = new Map<string, (typeof receivingRequests)[number]>();
     const requestByItemKey = new Map<string, (typeof receivingRequests)[number]>();
     const requestByDescriptionKey = new Map<string, (typeof receivingRequests)[number]>();
+    const dispatchByKey = new Map<string, (typeof dispatchRecords)[number]>();
 
     receivingRequests.forEach((request) => {
       [
@@ -182,6 +185,28 @@ export function StorePage() {
           buildDescriptionOnlyKey(request.projectNo, requestItem.itemDescription),
           request
         );
+      });
+    });
+
+    dispatchRecords.forEach((record) => {
+      [
+        record.id,
+        record.dispatchNo,
+        ...record.itemReceiveNos,
+      ]
+        .map((value) => normalizeLookupKey(value))
+        .filter(Boolean)
+        .forEach((key) => {
+          dispatchByKey.set(key, record);
+        });
+
+      record.items.forEach((dispatchItem) => {
+        [dispatchItem.stockReceiveNo, dispatchItem.stockItemId, dispatchItem.receiveNo]
+          .map((value) => normalizeLookupKey(value))
+          .filter(Boolean)
+          .forEach((key) => {
+            dispatchByKey.set(key, record);
+          });
       });
     });
 
@@ -251,6 +276,10 @@ export function StorePage() {
               requestByDescriptionKey.get(
                 buildDescriptionOnlyKey(normalizedActiveProjectNo, item.itemDescription)
               );
+            const dispatch =
+              requestKeys
+                .map((key) => dispatchByKey.get(key))
+                .find(Boolean) ?? null;
             const rawReceiveDate =
               item.lastReceivedAt ||
               item.receiveDate ||
@@ -266,11 +295,15 @@ export function StorePage() {
               item.receiveName ||
               request?.receiveName ||
               '-';
+            const form = dispatch
+              ? dispatch.sourceProjectNo || 'Project Transfer'
+              : 'New Receiving';
 
             return {
               id: item.stockItemId || item.receiveNo,
               receiveDate: formatBangkokDateTime(rawReceiveDate),
               prNo,
+              form,
               receivedByName,
               qty: item.qty,
               amount: item.amount,
@@ -285,7 +318,7 @@ export function StorePage() {
           representative.itemNo,
           normalizedActiveProjectNo,
           String(group.qty),
-          ...history.flatMap((entry) => [entry.prNo, entry.receivedByName, entry.receiveDate]),
+          ...history.flatMap((entry) => [entry.prNo, entry.form, entry.receivedByName, entry.receiveDate]),
           ...group.items.flatMap((item) => [item.receiveNo, item.prNo, item.poNo]),
         ]
           .join(' ')
@@ -310,7 +343,7 @@ export function StorePage() {
         const rightSortValue = right.history[0]?.sortValue ?? 0;
         return rightSortValue - leftSortValue;
       });
-  }, [normalizedActiveProjectNo, query, receivingRequests, stockItems]);
+  }, [dispatchRecords, normalizedActiveProjectNo, query, receivingRequests, stockItems]);
 
   const handleToggleExpand = (itemId: string) => {
     setExpandedItemIds((current) =>
@@ -344,7 +377,6 @@ export function StorePage() {
           <thead>
             <tr>
               <th className={styles.noColumn}>No</th>
-              <th className={styles.locationColumn}>Current Location</th>
               <th className={styles.itemSummaryColumn}>Item Summary</th>
               <th className={`${styles.totalQtyColumn} numeric`}>
                 {normalizedActiveProjectNo || 'Qty'}
@@ -364,9 +396,6 @@ export function StorePage() {
                     onClick={() => handleToggleExpand(item.id)}
                   >
                     <td className={styles.noColumn}>{index + 1}</td>
-                    <td className={styles.locationCell} title={item.location}>
-                      {item.location}
-                    </td>
                     <td className={styles.itemSummaryCell}>
                       <button
                         type="button"
@@ -401,7 +430,7 @@ export function StorePage() {
                   </tr>
                   {isExpanded ? (
                     <tr className={styles.detailRow}>
-                      <td colSpan={6}>
+                      <td colSpan={5}>
                         <div className={styles.detailPanel}>
                           <table className={styles.detailTable}>
                             <thead>
@@ -409,6 +438,7 @@ export function StorePage() {
                                 <th>No</th>
                                 <th>Receive Date</th>
                                 <th>PR No.</th>
+                                <th>Form</th>
                                 <th>Received By</th>
                                 <th className="numeric">Qty</th>
                                 <th className="numeric">Amount</th>
@@ -420,6 +450,7 @@ export function StorePage() {
                                   <td>{historyIndex + 1}</td>
                                   <td>{historyItem.receiveDate}</td>
                                   <td>{historyItem.prNo}</td>
+                                  <td>{historyItem.form}</td>
                                   <td>{historyItem.receivedByName}</td>
                                   <td className="numeric">{historyItem.qty.toLocaleString()}</td>
                                   <td className="numeric">{historyItem.amount.toLocaleString()}</td>
@@ -437,7 +468,7 @@ export function StorePage() {
             {filteredItems.length === 0 ? (
               <tr>
                 <td
-                  colSpan={6}
+                  colSpan={5}
                   className="text-center py-6 text-slate-400 font-semibold text-sm"
                 >
                   No store items match the active project and current filters.

@@ -64,6 +64,10 @@
   overflow: hidden;
 }
 
+.inventoryTable > thead th {
+  text-align: center;
+}
+
 .noColumn {
   width: 42px;
 }
@@ -73,12 +77,14 @@
 }
 
 .itemSummaryColumn {
-  width: 180px;
+  width: 250px;
 }
 
 .totalQtyColumn,
 .totalQtyCell {
-  width: 68px;
+  width: 60px;
+  border-left: 1px dashed #d8deea;
+  border-right: 1px dashed #d8deea;
 }
 
 .statusColumn,
@@ -129,9 +135,11 @@
 
 .projectQtyHeader,
 .projectQtyCell {
-  width: 54px;
+  width: 40px;
   min-width: 0;
-  padding-inline: 4px !important;
+  padding-inline: 3px !important;
+  border-left: 1px dashed #d8deea;
+  border-right: 1px dashed #d8deea;
 }
 
 .projectQtyHeader {
@@ -151,17 +159,18 @@
 }
 
 .detailPanel {
-  padding: 10px 14px 14px;
+  padding: 10px 0 14px;
 }
 
 .detailTable {
   width: 100%;
   border-collapse: collapse;
+  table-layout: fixed;
 }
 
 .detailTable th,
 .detailTable td {
-  padding: 8px 10px;
+  padding: 8px;
   border-top: 1px solid #e8ecf5;
   font-size: 12px;
   line-height: 16px;
@@ -176,6 +185,13 @@
 
 .detailTable td {
   color: var(--color-text);
+}
+
+.detailQtyColumn {
+  width: 56px;
+  padding-inline: 6px !important;
+  border-left: 1px dashed #d8deea;
+  border-right: 1px dashed #d8deea;
 }
 
 @media (max-width: 720px) {

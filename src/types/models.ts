@@ -18,11 +18,23 @@ export type StockStatus =
   | 'Available'
   | 'Pending Dispatch'
   | 'In Transit'
-  | 'Received at Site';
+  | 'Received at Site'
+  | 'Borrowed'
+  | 'Withdrawn';
 
 export type DispatchRecordStatus =
   | 'Pending Receipt'
   | 'Received at Site';
+
+export type WithdrawType =
+  | 'issue'
+  | 'borrow';
+
+export type WithdrawRecordStatus =
+  | 'Issued'
+  | 'Waiting Return'
+  | 'Overdue'
+  | 'Returned';
 
 export type ReceivingRequestStatus =
   | 'pending'
@@ -127,6 +139,7 @@ export interface DispatchItemSnapshot {
   itemNo: string;
   itemDescription: string;
   qty: number;
+  receivedQty?: number;
   vendorName: string;
   sourceLocation: string;
 }
@@ -151,6 +164,51 @@ export interface DispatchRecord {
   receivedAt?: string;
   receivedByName?: string;
   receivedByEmail?: string;
+  totalReceivedQty?: number;
+}
+
+export interface WithdrawItemSnapshot {
+  stockItemId: string;
+  receiveNo: string;
+  prNo: string;
+  poNo: string;
+  itemNo: string;
+  itemDescription: string;
+  qty: number;
+  returnedQty?: number;
+  amount: number;
+  unit?: string;
+  vendorName: string;
+  sourceLocation: string;
+  originalStatus: StockStatus;
+  stockItemSnapshot?: StockItem;
+}
+
+export interface WithdrawRecord {
+  id: string;
+  withdrawNo: string;
+  projectNo: string;
+  projectShortNo: string;
+  projectName: string;
+  type: WithdrawType;
+  status: WithdrawRecordStatus;
+  requesterName: string;
+  requesterPhone: string;
+  issuedByUid: string;
+  issuedByName: string;
+  issuedByEmail: string;
+  withdrawDate: string;
+  purpose: string;
+  dueDate?: string;
+  returnedAt?: string;
+  returnedByUid?: string;
+  returnedByName?: string;
+  returnedByEmail?: string;
+  itemReceiveNos: string[];
+  items: WithdrawItemSnapshot[];
+  totalQty: number;
+  photoUrls: string[];
+  createdAt: string;
 }
 
 export type UserRole =

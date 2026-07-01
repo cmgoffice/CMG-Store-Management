@@ -1,4 +1,4 @@
-import { CheckCircle2, ClipboardList, History, PackageCheck } from 'lucide-react';
+import { CheckCircle2, ClipboardList, History, PackageCheck, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { PageHeader } from '../components/PageHeader';
 import { SearchField } from '../components/SearchField';
@@ -41,6 +41,22 @@ function joinItemDescriptions(items: ReceivingRequest['items']) {
   return items
     .map((item) => item.itemDescription?.trim() || '-')
     .join(', ');
+}
+
+function getDispatchItemNames(items: DispatchRecord['items']) {
+  return items.map((item) => item.itemDescription?.trim() || '-');
+}
+
+function createDispatchReceiveQtyDraft(record: DispatchRecord) {
+  return record.items.reduce<Record<string, string>>((acc, item) => {
+    acc[item.stockReceiveNo] = String(item.qty);
+    return acc;
+  }, {});
+}
+
+function getProjectNoLastFive(value?: string) {
+  const text = value?.trim() ?? '';
+  return text ? text.slice(-5) : '-';
 }
 
 function normalizeProjectNoText(value?: string) {
@@ -119,6 +135,10 @@ export function ReceivingPage() {
   const [query, setQuery] = useState('');
   const [approvingRequestId, setApprovingRequestId] = useState<string | null>(null);
   const [approvingIncomingDispatchId, setApprovingIncomingDispatchId] = useState<string | null>(null);
+  const [selectedIncomingDispatch, setSelectedIncomingDispatch] = useState<DispatchRecord | null>(null);
+  const [receivingIncomingDispatch, setReceivingIncomingDispatch] = useState<DispatchRecord | null>(null);
+  const [incomingReceiveQtyDraft, setIncomingReceiveQtyDraft] = useState<Record<string, string>>({});
+  const [incomingReceiveError, setIncomingReceiveError] = useState('');
 
   const activeProject = activeProjects.find((project) => project.projectNo === activeProjectNo)
     ?? projects.find((project) => project.projectNo === activeProjectNo);
@@ -238,13 +258,86 @@ export function ReceivingPage() {
     }
   };
 
-  const handleApproveIncoming = async (dispatchId: string) => {
-    if (approvingIncomingDispatchId) return;
-    setApprovingIncomingDispatchId(dispatchId);
+  const openIncomingDispatchDetail = (record: DispatchRecord) => {
+    setSelectedIncomingDispatch(record);
+  };
+
+  const closeIncomingDispatchDetail = () => {
+    setSelectedIncomingDispatch(null);
+  };
+
+  const openIncomingReceiveModal = (record: DispatchRecord) => {
+    setIncomingReceiveError('');
+    setReceivingIncomingDispatch(record);
+    setIncomingReceiveQtyDraft(createDispatchReceiveQtyDraft(record));
+  };
+
+  const closeIncomingReceiveModal = () => {
+    if (approvingIncomingDispatchId) {
+      return;
+    }
+
+    setIncomingReceiveError('');
+    setReceivingIncomingDispatch(null);
+    setIncomingReceiveQtyDraft({});
+  };
+
+  const handleIncomingReceiveQtyChange = (stockReceiveNo: string, value: string) => {
+    const normalizedValue = value.replace(/[^\d]/g, '');
+    setIncomingReceiveQtyDraft((current) => ({
+      ...current,
+      [stockReceiveNo]: normalizedValue,
+    }));
+  };
+
+  const handleConfirmIncomingReceive = async () => {
+    if (!receivingIncomingDispatch || approvingIncomingDispatchId) {
+      return;
+    }
+
+    const receivedItems = receivingIncomingDispatch.items.map((item) => {
+      const parsedQty = Number.parseInt(incomingReceiveQtyDraft[item.stockReceiveNo] ?? String(item.qty), 10);
+      const receivedQty = Number.isFinite(parsedQty) ? parsedQty : Number.NaN;
+
+      return {
+        stockReceiveNo: item.stockReceiveNo,
+        itemDescription: item.itemDescription,
+        maxQty: item.qty,
+        receivedQty,
+      };
+    });
+
+    const hasInvalidQty = receivedItems.some(
+      (item) => !Number.isInteger(item.receivedQty) || item.receivedQty < 0 || item.receivedQty > item.maxQty
+    );
+
+    if (hasInvalidQty) {
+      setIncomingReceiveError('Please enter whole numbers between 0 and the dispatched qty for every item.');
+      return;
+    }
+
+    if (!receivedItems.some((item) => item.receivedQty > 0)) {
+      setIncomingReceiveError('At least one item must have a received qty greater than 0.');
+      return;
+    }
+
+    setIncomingReceiveError('');
+    setApprovingIncomingDispatchId(receivingIncomingDispatch.id);
     try {
-      await receiveDispatch(dispatchId);
+      await receiveDispatch(
+        receivingIncomingDispatch.id,
+        receivedItems.map((item) => ({
+          stockReceiveNo: item.stockReceiveNo,
+          receivedQty: item.receivedQty,
+        }))
+      );
+      setIncomingReceiveError('');
+      setReceivingIncomingDispatch(null);
+      setIncomingReceiveQtyDraft({});
+      setSelectedIncomingDispatch(null);
     } catch (error) {
       console.error('Failed to receive incoming dispatch:', error);
+      setIncomingReceiveError('Could not save the received quantities. Please try again.');
     } finally {
       setApprovingIncomingDispatchId(null);
     }
@@ -372,7 +465,6 @@ export function ReceivingPage() {
                         <th>No.</th>
                         <th>Request ID</th>
                         <th>PR</th>
-                        <th>Vendor</th>
                         <th>Description</th>
                         <th className="numeric">Qty</th>
                         <th className="numeric">Amount</th>
@@ -389,7 +481,6 @@ export function ReceivingPage() {
                             <span className={styles.receiveCode}>{request.id}</span>
                           </td>
                           <td>{request.prNo || '-'}</td>
-                          <td>{request.vendorName || '-'}</td>
                           <td className={styles.descriptionCell}>{joinItemDescriptions(request.items)}</td>
                           <td className="numeric">{request.totalQty.toLocaleString()}</td>
                           <td className="numeric">{formatAmount(request.totalAmount)}</td>
@@ -449,63 +540,40 @@ export function ReceivingPage() {
                   <thead>
                     <tr>
                       <th>Dispatch No.</th>
-                      <th>Route</th>
+                      <th>From</th>
                       <th>Dispatched At</th>
                       <th>Vehicle Plate</th>
                       <th>Items</th>
-                      <th>Attachment</th>
-                      <th>Sent By</th>
+                      <th className="numeric">Qty</th>
+                      <th>Dispatch By</th>
                       <th>Status</th>
                       <th>Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {group.items.map((record) => (
-                      <tr key={record.id}>
+                      <tr
+                        key={record.id}
+                        className={styles.clickableRow}
+                        onClick={() => openIncomingDispatchDetail(record)}
+                      >
                         <td>
                           <span className={styles.receiveCode}>{record.dispatchNo}</span>
                         </td>
-                        <td>
-                          <div className={styles.routeCell}>
-                            <strong>
-                              {record.sourceProjectNo || '-'} to {record.destinationProjectNo}
-                            </strong>
-                            <span>
-                              {record.sourceProjectName || 'Unknown source project'} to {record.destinationProjectName}
-                            </span>
-                          </div>
-                        </td>
+                        <td>{getProjectNoLastFive(record.sourceProjectNo)}</td>
                         <td>{formatDateTime(record.dispatchedAt)}</td>
                         <td>{record.transport || '-'}</td>
                         <td>
                           <div className={styles.itemStack}>
-                            {record.items.map((item) => (
-                              <span key={`${record.id}-${item.stockReceiveNo}`} className={styles.itemChip}>
-                                {item.receiveNo} / {item.itemDescription} / Qty {item.qty}
+                            {getDispatchItemNames(record.items).map((itemName, index) => (
+                              <span key={`${record.id}-${index}`} className={styles.itemChip}>
+                                {itemName}
                               </span>
                             ))}
                             {record.note ? <span className={styles.noteText}>Note: {record.note}</span> : null}
                           </div>
                         </td>
-                        <td>
-                          {record.photoUrls.length > 0 ? (
-                            <div className={styles.photoList}>
-                              {record.photoUrls.map((url, index) => (
-                                <a
-                                  key={`${record.id}-${index}`}
-                                  href={url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className={styles.photoLink}
-                                >
-                                  Photo {index + 1}
-                                </a>
-                              ))}
-                            </div>
-                          ) : (
-                            <span className={styles.noteText}>No photo</span>
-                          )}
-                        </td>
+                        <td className="numeric">{record.totalQty.toLocaleString()}</td>
                         <td>{record.dispatchedByName}</td>
                         <td>
                           <StatusBadge status={record.status} />
@@ -515,14 +583,17 @@ export function ReceivingPage() {
                             className={styles.approveButton}
                             type="button"
                             disabled={!canApproveReceipt || approvingIncomingDispatchId !== null}
-                            onClick={() => handleApproveIncoming(record.id)}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              openIncomingReceiveModal(record);
+                            }}
                           >
                             {approvingIncomingDispatchId === record.id ? (
                               <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                             ) : (
                               <CheckCircle2 size={16} />
                             )}
-                            <span>{approvingIncomingDispatchId === record.id ? 'Receiving...' : 'Receive into Project'}</span>
+                            <span>{approvingIncomingDispatchId === record.id ? 'Receiving...' : 'Receive'}</span>
                           </button>
                         </td>
                       </tr>
@@ -605,6 +676,228 @@ export function ReceivingPage() {
           ))}
         </section>
       )}
+
+      {selectedIncomingDispatch && !receivingIncomingDispatch ? (
+        <div className={styles.modalOverlay}>
+          <div className={`${styles.modal} ${styles.detailModal}`}>
+            <div className={styles.modalHeader}>
+              <div>
+                <h3>Dispatch Details</h3>
+                <p>Review all transferred items before receiving them into the destination project.</p>
+              </div>
+              <button
+                type="button"
+                className={styles.iconButton}
+                onClick={closeIncomingDispatchDetail}
+                aria-label="Close dispatch details"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className={styles.modalBody}>
+              <div className={styles.detailHero}>
+                <div className={styles.modalInfo}>
+                  <span>Dispatch No.</span>
+                  <strong>{selectedIncomingDispatch.dispatchNo}</strong>
+                </div>
+                <StatusBadge status={selectedIncomingDispatch.status} />
+              </div>
+
+              <div className={styles.detailGrid}>
+                <div className={styles.detailCard}>
+                  <span>From</span>
+                  <strong>{selectedIncomingDispatch.sourceProjectNo || '-'}</strong>
+                  <p>{selectedIncomingDispatch.sourceProjectName || 'Unknown source project'}</p>
+                </div>
+
+                <div className={styles.detailCard}>
+                  <span>To</span>
+                  <strong>{selectedIncomingDispatch.destinationProjectNo || '-'}</strong>
+                  <p>{selectedIncomingDispatch.destinationProjectName || 'Unknown destination project'}</p>
+                </div>
+
+                <div className={styles.detailCard}>
+                  <span>Vehicle Plate</span>
+                  <strong>{selectedIncomingDispatch.transport || '-'}</strong>
+                  <p>Dispatched at {formatDateTime(selectedIncomingDispatch.dispatchedAt)}</p>
+                </div>
+
+                <div className={styles.detailCard}>
+                  <span>Dispatch By</span>
+                  <strong>{selectedIncomingDispatch.dispatchedByName || '-'}</strong>
+                  <p>{selectedIncomingDispatch.dispatchedByEmail || '-'}</p>
+                </div>
+              </div>
+
+              <div className={styles.field}>
+                <span>Items</span>
+                <div className={styles.detailItemsTable}>
+                  <div className={styles.receiveItemsHead}>
+                    <span>Receive No.</span>
+                    <span>PR / PO</span>
+                    <span>Item</span>
+                    <span className={styles.numericCell}>Qty Sent</span>
+                  </div>
+                  <div className={styles.receiveItemsBody}>
+                    {selectedIncomingDispatch.items.map((item) => (
+                      <div key={`${selectedIncomingDispatch.id}-${item.stockReceiveNo}`} className={styles.receiveItemRow}>
+                        <span>{item.receiveNo}</span>
+                        <span>{item.prNo || item.poNo || '-'}</span>
+                        <span>
+                          {item.itemDescription}
+                          <small>{item.itemNo}</small>
+                        </span>
+                        <span className={styles.numericCell}>{item.qty.toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              <div className={styles.detailGrid}>
+                <div className={styles.field}>
+                  <span>Note</span>
+                  <div className={styles.detailTextBlock}>{selectedIncomingDispatch.note || '-'}</div>
+                </div>
+
+                <div className={styles.field}>
+                  <span>Attachments</span>
+                  <div className={styles.detailTextBlock}>
+                    {selectedIncomingDispatch.photoUrls.length > 0 ? (
+                      <div className={styles.photoList}>
+                        {selectedIncomingDispatch.photoUrls.map((url, index) => (
+                          <a
+                            key={`${selectedIncomingDispatch.id}-${index}`}
+                            href={url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className={styles.photoLink}
+                          >
+                            Photo {index + 1}
+                          </a>
+                        ))}
+                      </div>
+                    ) : (
+                      'No photo'
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className={styles.modalFooter}>
+              <button type="button" className={styles.ghostButton} onClick={closeIncomingDispatchDetail}>
+                Close
+              </button>
+              <button
+                type="button"
+                className={styles.primaryButton}
+                disabled={!canApproveReceipt || approvingIncomingDispatchId !== null}
+                onClick={() => openIncomingReceiveModal(selectedIncomingDispatch)}
+              >
+                <CheckCircle2 size={16} />
+                <span>Receive</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {receivingIncomingDispatch ? (
+        <div className={styles.modalOverlay}>
+          <div className={`${styles.modal} ${styles.receiveModal}`}>
+            <div className={styles.modalHeader}>
+              <div>
+                <h3>Receive Dispatch</h3>
+                <p>Enter the actual received qty for each item. Default values match the dispatched qty.</p>
+              </div>
+              <button
+                type="button"
+                className={styles.iconButton}
+                onClick={closeIncomingReceiveModal}
+                aria-label="Close receive modal"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className={styles.modalBody}>
+              <div className={styles.modalInfoRow}>
+                <div className={styles.modalInfo}>
+                  <span>Dispatch No.</span>
+                  <strong>{receivingIncomingDispatch.dispatchNo}</strong>
+                </div>
+                <div className={styles.modalInfo}>
+                  <span>From</span>
+                  <strong>{receivingIncomingDispatch.sourceProjectNo || '-'}</strong>
+                </div>
+                <div className={styles.modalInfo}>
+                  <span>To</span>
+                  <strong>{receivingIncomingDispatch.destinationProjectNo || '-'}</strong>
+                </div>
+              </div>
+
+              <div className={styles.field}>
+                <span>Received Qty by Item</span>
+                <div className={styles.detailItemsTable}>
+                  <div className={styles.receiveFormHead}>
+                    <span>Receive No.</span>
+                    <span>Item</span>
+                    <span className={styles.numericCell}>Qty Sent</span>
+                    <span className={styles.numericCell}>Qty Received</span>
+                  </div>
+                  <div className={styles.receiveItemsBody}>
+                    {receivingIncomingDispatch.items.map((item) => (
+                      <div key={`${receivingIncomingDispatch.id}-${item.stockReceiveNo}`} className={styles.receiveFormRow}>
+                        <span>{item.receiveNo}</span>
+                        <span>
+                          {item.itemDescription}
+                          <small>{item.itemNo}</small>
+                        </span>
+                        <span className={styles.numericCell}>{item.qty.toLocaleString()}</span>
+                        <input
+                          className={styles.qtyInput}
+                          type="text"
+                          inputMode="numeric"
+                          value={incomingReceiveQtyDraft[item.stockReceiveNo] ?? ''}
+                          onChange={(event) => handleIncomingReceiveQtyChange(item.stockReceiveNo, event.target.value)}
+                          placeholder="0"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className={styles.modalFooter}>
+              <button
+                type="button"
+                className={styles.ghostButton}
+                onClick={closeIncomingReceiveModal}
+                disabled={approvingIncomingDispatchId === receivingIncomingDispatch.id}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className={styles.primaryButton}
+                disabled={approvingIncomingDispatchId === receivingIncomingDispatch.id}
+                onClick={handleConfirmIncomingReceive}
+              >
+                {approvingIncomingDispatchId === receivingIncomingDispatch.id ? (
+                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <CheckCircle2 size={16} />
+                )}
+                <span>{approvingIncomingDispatchId === receivingIncomingDispatch.id ? 'Saving...' : 'Confirm Receive'}</span>
+              </button>
+            </div>
+            {incomingReceiveError ? <div className={styles.footerError}>{incomingReceiveError}</div> : null}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

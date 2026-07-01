@@ -6,6 +6,7 @@ import { ProjectListPage } from './pages/ProjectListPage';
 import { ReceivingPage } from './pages/ReceivingPage';
 import { StockListPage } from './pages/StockListPage';
 import { StorePage } from './pages/StorePage';
+import { WithdrawPage } from './pages/WithdrawPage';
 import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { PendingApprovalPage } from './pages/PendingApprovalPage';
@@ -54,6 +55,7 @@ export function App() {
                   }
                 />
                 <Route path="/store/store" element={<StorePage />} />
+                <Route path="/store/withdraw" element={<WithdrawPage />} />
                 <Route
                   path="/store/dispatch"
                   element={
