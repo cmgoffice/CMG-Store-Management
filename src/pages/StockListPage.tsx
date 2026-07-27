@@ -1,7 +1,9 @@
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Fragment, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
 import { SearchField } from '../components/SearchField';
+import { getItemTypeOption, matchesItemType } from '../constants/itemTypes';
 import { useInventory } from '../context/InventoryContext';
 import type { StockItem } from '../types/models';
 import '../styles/tables.css';
@@ -150,7 +152,13 @@ function formatBangkokDateTime(value: string) {
 export function StockListPage() {
   const { projects, stockItems, receivingRequests } = useInventory();
   const [query, setQuery] = useState('');
+  const [searchParams] = useSearchParams();
+  const selectedItemType = getItemTypeOption(searchParams.get('itemType') ?? '')?.code ?? '';
   const [expandedItemIds, setExpandedItemIds] = useState<string[]>([]);
+  const categoryFilteredStockItems = useMemo(
+    () => stockItems.filter((item) => matchesItemType(item, selectedItemType)),
+    [selectedItemType, stockItems]
+  );
   const projectByNo = useMemo(() => {
     return new Map(projects.map((project) => [normalizeProjectNo(project.projectNo), project]));
   }, [projects]);
@@ -160,7 +168,7 @@ export function StockListPage() {
   const projectQtyColumns = useMemo<InventoryProjectQty[]>(() => {
     const qtyByProject = new Map<string, number>();
 
-    stockItems.forEach((item) => {
+    categoryFilteredStockItems.forEach((item) => {
       const projectNo = getStockItemProjectNo(item);
       qtyByProject.set(projectNo, (qtyByProject.get(projectNo) ?? 0) + item.qty);
     });
@@ -185,7 +193,7 @@ export function StockListPage() {
           qty,
         };
       });
-  }, [projectByNo, projectOrder, stockItems]);
+  }, [categoryFilteredStockItems, projectByNo, projectOrder]);
 
   const filteredItems = useMemo<AggregatedInventoryItem[]>(() => {
     const normalized = query.trim().toLowerCase();
@@ -241,7 +249,7 @@ export function StockListPage() {
       }
     >();
 
-    stockItems.forEach((item) => {
+    categoryFilteredStockItems.forEach((item) => {
       const groupKey = `${item.itemNo.trim().toLowerCase()}::${item.itemDescription.trim().toLowerCase()}`;
       const currentGroup = groupedItems.get(groupKey) ?? {
         items: [],
@@ -389,7 +397,7 @@ export function StockListPage() {
         const rightSortValue = right.history[0]?.sortValue ?? 0;
         return rightSortValue - leftSortValue;
       });
-  }, [projectByNo, projectOrder, query, receivingRequests, stockItems]);
+  }, [categoryFilteredStockItems, projectByNo, projectOrder, query, receivingRequests]);
 
   const handleToggleExpand = (itemId: string) => {
     setExpandedItemIds((current) =>
@@ -402,11 +410,11 @@ export function StockListPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Store"
-        title="Inventory"
-        description="Inventory overview across all projects, with quantity split by project."
+        eyebrow="คลังสินค้า"
+        title="สินค้าคงคลัง"
+        description="ภาพรวมสินค้าคงคลังทุกโครงการ พร้อมแสดงจำนวนแยกตามโครงการ"
         actions={
-          <SearchField value={query} onChange={setQuery} placeholder="Search inventory" />
+          <SearchField value={query} onChange={setQuery} placeholder="ค้นหาสินค้าคงคลัง" />
         }
       />
 
@@ -414,8 +422,8 @@ export function StockListPage() {
         <table className={`table compact ${styles.inventoryTable}`}>
           <thead>
             <tr>
-              <th className={styles.noColumn}>No</th>
-              <th className={styles.itemSummaryColumn}>Item Summary</th>
+              <th className={styles.noColumn}>ลำดับ</th>
+              <th className={styles.itemSummaryColumn}>รายการสินค้า</th>
               {projectQtyColumns.map((project) => (
                 <th
                   key={project.projectNo}
@@ -425,9 +433,7 @@ export function StockListPage() {
                   {project.projectNo}
                 </th>
               ))}
-              <th className={`${styles.totalQtyColumn} numeric`}>Total Qty</th>
-              <th className={styles.statusColumn}>Status</th>
-              <th className={`${styles.amountColumn} numeric`}>Amount</th>
+              <th className={`${styles.totalQtyColumn} numeric`}>จำนวนรวม</th><th className={styles.statusColumn}>สถานะ</th><th className={`${styles.amountColumn} numeric`}>มูลค่า</th>
             </tr>
           </thead>
           <tbody>
@@ -492,13 +498,7 @@ export function StockListPage() {
                           <table className={styles.detailTable}>
                             <thead>
                               <tr>
-                                <th>No</th>
-                                <th>Project</th>
-                                <th>Receive Date</th>
-                                <th>PR No.</th>
-                                <th>Received By</th>
-                                <th className={`numeric ${styles.detailQtyColumn}`}>Qty</th>
-                                <th className="numeric">Amount</th>
+                                <th>ลำดับ</th><th>โครงการ</th><th>วันที่รับ</th><th>เลขที่ PR</th><th>ผู้รับสินค้า</th><th className={`numeric ${styles.detailQtyColumn}`}>จำนวน</th><th className="numeric">มูลค่า</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -530,7 +530,7 @@ export function StockListPage() {
                   colSpan={5 + projectQtyColumns.length}
                   className="text-center py-6 text-slate-400 font-semibold text-sm"
                 >
-                  No inventory items match the current filters.
+                  ไม่พบสินค้าคงคลังตามเงื่อนไขที่ค้นหา
                 </td>
               </tr>
             )}

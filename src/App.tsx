@@ -41,7 +41,7 @@ export function App() {
                 <Route
                   path="/projects"
                   element={
-                    <ProtectedRoute requireApproved={true} requireRoles={['MasterAdmin', 'Admin Site', 'Staff']}>
+                    <ProtectedRoute requireApproved={true} requireRoles={['MasterAdmin']}>
                       <ProjectListPage />
                     </ProtectedRoute>
                   }

@@ -29,7 +29,7 @@ export function RegisterPage() {
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !password || !firstName || !lastName || !position) {
-      setError('Please fill in all fields.');
+        setError('กรุณากรอกข้อมูลให้ครบทุกช่อง');
       return;
     }
 
@@ -43,13 +43,13 @@ export function RegisterPage() {
       const authError = err as { code?: string; message?: string };
       console.error('Registration error:', err);
       if (authError.code === 'auth/email-already-in-use') {
-        setError('This email address is already registered in the system.');
+        setError('อีเมลนี้ลงทะเบียนในระบบแล้ว');
       } else if (authError.code === 'auth/weak-password') {
-        setError('Password should be at least 6 characters long.');
+        setError('รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร');
       } else if (authError.code === 'auth/invalid-email') {
-        setError('Please enter a valid email address.');
+        setError('กรุณากรอกอีเมลให้ถูกต้อง');
       } else {
-        setError('Registration failed. Please check details and try again.');
+        setError('ลงทะเบียนไม่สำเร็จ กรุณาตรวจสอบข้อมูลและลองใหม่');
       }
     } finally {
       setLoading(false);
@@ -70,9 +70,9 @@ export function RegisterPage() {
           <div className="inline-flex items-center justify-center w-14 h-14 bg-gradient-to-tr from-[#6e42f4] to-[#4f2ed9] rounded-2xl text-white shadow-lg shadow-purple-200 mb-4">
             <ShieldCheck size={26} />
           </div>
-          <h1 className="text-2xl font-extrabold text-[#141b2b] tracking-tight">Create Account</h1>
+          <h1 className="text-2xl font-extrabold text-[#141b2b] tracking-tight">สร้างบัญชีผู้ใช้</h1>
           <p className="text-xs text-[#404752] mt-1.5 font-medium uppercase tracking-wider">
-            Register for CMG Store Management
+            ลงทะเบียนใช้งานระบบจัดการคลังสินค้า CMG
           </p>
         </div>
 
@@ -89,13 +89,13 @@ export function RegisterPage() {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-[#404752] uppercase mb-1.5 tracking-wider">
-                First Name
+                ชื่อ
               </label>
               <div className="relative">
                 <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-purple-400" size={16} />
                 <input
                   type="text"
-                  placeholder="First name"
+                  placeholder="ชื่อ"
                   value={firstName}
                   onChange={(e) => setFirstName(e.target.value)}
                   disabled={loading}
@@ -107,13 +107,13 @@ export function RegisterPage() {
 
             <div>
               <label className="block text-xs font-bold text-[#404752] uppercase mb-1.5 tracking-wider">
-                Last Name
+                นามสกุล
               </label>
               <div className="relative">
                 <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-purple-400" size={16} />
                 <input
                   type="text"
-                  placeholder="Last name"
+                  placeholder="นามสกุล"
                   value={lastName}
                   onChange={(e) => setLastName(e.target.value)}
                   disabled={loading}
@@ -126,13 +126,13 @@ export function RegisterPage() {
 
           <div>
             <label className="block text-xs font-bold text-[#404752] uppercase mb-1.5 tracking-wider">
-              Position / Department
+              ตำแหน่ง / แผนก
             </label>
             <div className="relative">
               <Briefcase className="absolute left-4 top-1/2 -translate-y-1/2 text-purple-400" size={16} />
               <input
                 type="text"
-                placeholder="e.g. Project Engineer, Store Manager"
+                placeholder="เช่น วิศวกรโครงการ, ผู้จัดการคลัง"
                 value={position}
                 onChange={(e) => setPosition(e.target.value)}
                 disabled={loading}
@@ -144,13 +144,13 @@ export function RegisterPage() {
 
           <div>
             <label className="block text-xs font-bold text-[#404752] uppercase mb-1.5 tracking-wider">
-              Email Address
+              อีเมล
             </label>
             <div className="relative">
               <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-purple-400" size={16} />
               <input
                 type="email"
-                placeholder="work email address"
+                placeholder="อีเมลที่ทำงาน"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 disabled={loading}
@@ -162,13 +162,13 @@ export function RegisterPage() {
 
           <div>
             <label className="block text-xs font-bold text-[#404752] uppercase mb-1.5 tracking-wider">
-              Password
+              รหัสผ่าน
             </label>
             <div className="relative">
               <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-purple-400" size={16} />
               <input
                 type="password"
-                placeholder="at least 6 characters"
+                placeholder="อย่างน้อย 6 ตัวอักษร"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={loading}
@@ -186,7 +186,7 @@ export function RegisterPage() {
             {loading ? (
               <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
             ) : (
-              'Submit Registration'
+              'ส่งคำขอลงทะเบียน'
             )}
           </button>
         </form>
@@ -194,12 +194,12 @@ export function RegisterPage() {
         {/* Back to Login Redirect */}
         <div className="text-center mt-8">
           <p className="text-xs text-[#404752] font-semibold">
-            Already have an account?{' '}
+            มีบัญชีอยู่แล้ว?{' '}
             <Link
               to="/login"
               className="text-[#6e42f4] hover:underline font-bold"
             >
-              Sign In
+              เข้าสู่ระบบ
             </Link>
           </p>
         </div>

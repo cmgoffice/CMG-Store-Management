@@ -1,7 +1,9 @@
 import { ChevronDown, ChevronRight } from 'lucide-react';
 import { Fragment, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
 import { SearchField } from '../components/SearchField';
+import { getItemTypeOption, matchesItemType } from '../constants/itemTypes';
 import { useInventory } from '../context/InventoryContext';
 import type { StockItem } from '../types/models';
 import '../styles/tables.css';
@@ -144,6 +146,8 @@ export function StorePage() {
     activeProjectNo,
   } = useInventory();
   const [query, setQuery] = useState('');
+  const [searchParams] = useSearchParams();
+  const selectedItemType = getItemTypeOption(searchParams.get('itemType') ?? '')?.code ?? '';
   const [expandedItemIds, setExpandedItemIds] = useState<string[]>([]);
   const normalizedActiveProjectNo = normalizeProjectNo(activeProjectNo);
 
@@ -211,7 +215,11 @@ export function StorePage() {
     });
 
     const projectItems = normalizedActiveProjectNo
-      ? stockItems.filter((item) => getStockItemProjectNo(item) === normalizedActiveProjectNo)
+      ? stockItems.filter(
+          (item) =>
+            getStockItemProjectNo(item) === normalizedActiveProjectNo &&
+            matchesItemType(item, selectedItemType)
+        )
       : [];
 
     const groupedItems = new Map<
@@ -343,7 +351,7 @@ export function StorePage() {
         const rightSortValue = right.history[0]?.sortValue ?? 0;
         return rightSortValue - leftSortValue;
       });
-  }, [dispatchRecords, normalizedActiveProjectNo, query, receivingRequests, stockItems]);
+  }, [dispatchRecords, normalizedActiveProjectNo, query, receivingRequests, selectedItemType, stockItems]);
 
   const handleToggleExpand = (itemId: string) => {
     setExpandedItemIds((current) =>
@@ -357,7 +365,7 @@ export function StorePage() {
     <div>
       <PageHeader
         eyebrow="Project Store"
-        title="Store Inventory"
+        title="สินค้าคงคลังโครงการ"
         description={
           normalizedActiveProjectNo
             ? `Inventory table for Project ${normalizedActiveProjectNo}.`
@@ -367,7 +375,7 @@ export function StorePage() {
           <SearchField
             value={query}
             onChange={setQuery}
-            placeholder="Search store items"
+            placeholder="ค้นหารายการสินค้าในคลัง"
           />
         }
       />
@@ -376,13 +384,13 @@ export function StorePage() {
         <table className={`table compact ${styles.inventoryTable}`}>
           <thead>
             <tr>
-              <th className={styles.noColumn}>No</th>
-              <th className={styles.itemSummaryColumn}>Item Summary</th>
+              <th className={styles.noColumn}>ลำดับ</th>
+              <th className={styles.itemSummaryColumn}>รายการสินค้า</th>
               <th className={`${styles.totalQtyColumn} numeric`}>
                 {normalizedActiveProjectNo || 'Qty'}
               </th>
-              <th className={styles.statusColumn}>Status</th>
-              <th className={`${styles.amountColumn} numeric`}>Amount</th>
+              <th className={styles.statusColumn}>สถานะ</th>
+              <th className={`${styles.amountColumn} numeric`}>มูลค่า</th>
             </tr>
           </thead>
           <tbody>
@@ -435,13 +443,7 @@ export function StorePage() {
                           <table className={styles.detailTable}>
                             <thead>
                               <tr>
-                                <th>No</th>
-                                <th>Receive Date</th>
-                                <th>PR No.</th>
-                                <th>Form</th>
-                                <th>Received By</th>
-                                <th className="numeric">Qty</th>
-                                <th className="numeric">Amount</th>
+                                <th>ลำดับ</th><th>วันที่รับ</th><th>เลขที่ PR</th><th>รูปแบบ</th><th>ผู้รับสินค้า</th><th className="numeric">จำนวน</th><th className="numeric">มูลค่า</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -471,7 +473,7 @@ export function StorePage() {
                   colSpan={5}
                   className="text-center py-6 text-slate-400 font-semibold text-sm"
                 >
-                  No store items match the active project and current filters.
+                  ไม่พบรายการสินค้าในโครงการและเงื่อนไขที่เลือก
                 </td>
               </tr>
             ) : null}

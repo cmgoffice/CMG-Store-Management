@@ -39,16 +39,16 @@ export function PendingApprovalPage() {
         </div>
 
         {/* Message */}
-        <h1 className="text-2xl font-black text-[#141b2b] mb-3">Pending Registration Approval</h1>
+        <h1 className="text-2xl font-black text-[#141b2b] mb-3">รออนุมัติการลงทะเบียน</h1>
         <p className="text-sm font-semibold text-[#404752] leading-relaxed mb-6">
-          Hello, <strong className="text-[#6e42f4]">{userProfile?.firstName} {userProfile?.lastName}</strong>. Your account has been registered successfully. 
-          Please wait for a MasterAdmin or System Administrator to approve your request.
+          สวัสดี <strong className="text-[#6e42f4]">{userProfile?.firstName} {userProfile?.lastName}</strong> บัญชีของคุณลงทะเบียนเรียบร้อยแล้ว
+          กรุณารอผู้ดูแลระบบอนุมัติคำขอของคุณ
         </p>
 
         {/* Status indicator */}
         <div className="inline-flex items-center gap-2 bg-amber-50 border border-amber-200 text-amber-700 text-xs font-bold px-4 py-2 rounded-full mb-8">
           <span className="w-2.5 h-2.5 rounded-full bg-amber-500 animate-ping shrink-0" />
-          <span>STATUS: PENDING ADMINISTRATOR REVIEW</span>
+          <span>สถานะ: รอผู้ดูแลระบบตรวจสอบ</span>
         </div>
 
         {/* Action Button */}
@@ -57,7 +57,7 @@ export function PendingApprovalPage() {
           className="w-full h-11 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold text-sm rounded-xl shadow-sm active:scale-[0.99] transition-all flex items-center justify-center gap-2.5"
         >
           <LogOut size={16} />
-          <span>Log Out and Return</span>
+          <span>ออกจากระบบและกลับ</span>
         </button>
       </div>
     </div>

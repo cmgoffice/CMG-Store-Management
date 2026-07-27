@@ -98,6 +98,19 @@
   justify-content: center;
 }
 
+.languageButton {
+  height: 36px;
+  min-width: 40px;
+  border: 0;
+  border-radius: 14px;
+  background: rgb(255 255 255 / 88%);
+  color: #5f35e8;
+  box-shadow: 0 12px 26px rgb(93 72 177 / 8%);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .roleSwitcher {
   display: inline-flex;
   align-items: center;

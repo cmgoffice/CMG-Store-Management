@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { collection, onSnapshot, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useInventory } from '../context/InventoryContext';
+import { useDialog } from '../context/DialogContext';
 import { UserProfile, UserRole } from '../types/models';
 import { PageHeader } from '../components/PageHeader';
 import { SearchField } from '../components/SearchField';
@@ -41,6 +42,21 @@ function sanitizeProjectRoles(projectRoles?: Record<string, UserRole[]>) {
   );
 }
 
+function getShortProjectNo(projectNo: string) {
+  const normalizedProjectNo = projectNo.trim().toUpperCase();
+  const shortProjectMatch = normalizedProjectNo.match(
+    /(?:^|[^A-Z0-9])J[-_\s]*0*(\d+)(?:[-_\s]*([A-Z]+))?(?=$|[^A-Z0-9])/
+  );
+
+  if (!shortProjectMatch) {
+    return normalizedProjectNo;
+  }
+
+  const projectNumber = shortProjectMatch[1].padStart(2, '0');
+  const projectSuffix = shortProjectMatch[2] ?? '';
+  return `J${projectNumber}${projectSuffix}`;
+}
+
 type DropdownPosition = {
   top: number;
   left: number;
@@ -49,7 +65,8 @@ type DropdownPosition = {
 };
 
 export function AdminPanel() {
-  const { projects: allProjects } = useInventory();
+  const { showAlert } = useDialog();
+  const { activeProjects } = useInventory();
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
@@ -256,7 +273,7 @@ export function AdminPanel() {
       setEditingUser(null);
     } catch (error) {
       console.error('Failed to save user updates:', error);
-      alert('Failed to save changes. Please try again.');
+      await showAlert('ไม่สามารถบันทึกการเปลี่ยนแปลงได้ กรุณาลองใหม่อีกครั้ง', { variant: 'error' });
     } finally {
       setIsSubmitting(false);
     }
@@ -278,7 +295,7 @@ export function AdminPanel() {
     return (
       <div className="flex flex-col items-center justify-center min-h-[400px] text-[#4f2ed9]">
         <div className="w-8 h-8 border-4 border-purple-100 border-t-purple-600 rounded-full animate-spin mb-4" />
-        <span className="font-semibold text-xs tracking-wider uppercase">Loading directory...</span>
+        <span className="font-semibold text-xs tracking-wider uppercase">กำลังโหลดรายชื่อ...</span>
       </div>
     );
   }
@@ -287,13 +304,13 @@ export function AdminPanel() {
     <div className="p-1 font-sans">
       <PageHeader
         eyebrow="System Security"
-        title="User Control Panel"
+        title="จัดการผู้ใช้"
         description="Approve registration requests, manage project clearance, and assign user permissions in real-time."
         actions={
           <SearchField
             value={query}
             onChange={setQuery}
-            placeholder="Search users by name, role, email..."
+            placeholder="ค้นหาผู้ใช้ตามชื่อ บทบาท หรืออีเมล..."
           />
         }
       />
@@ -311,13 +328,7 @@ export function AdminPanel() {
           </colgroup>
           <thead>
             <tr>
-              <th>Profile</th>
-              <th>Name & Email</th>
-              <th>Position</th>
-              <th>Status</th>
-              <th>Global Roles</th>
-              <th>Project Clearance & Roles</th>
-              <th className="numeric">Actions</th>
+              <th>โปรไฟล์</th><th>ชื่อและอีเมล</th><th>ตำแหน่ง</th><th>สถานะ</th><th>บทบาทส่วนกลาง</th><th>สิทธิ์และบทบาทโครงการ</th><th className="numeric">การดำเนินการ</th>
             </tr>
           </thead>
           <tbody>
@@ -391,20 +402,14 @@ export function AdminPanel() {
                     ) : user.assignedProjects && user.assignedProjects.length > 0 ? (
                       <div className="flex flex-nowrap items-center gap-1 overflow-hidden whitespace-nowrap">
                         {user.assignedProjects.map((pNo) => {
-                          const sanitizedRoles = sanitizeRoles(user.projectRoles?.[pNo] || ['Staff']);
-                          const projRoles = sanitizedRoles.length > 0 ? sanitizedRoles : ['Staff'];
+                          const shortProjectNo = getShortProjectNo(pNo);
                           return (
                             <div
                               key={pNo}
-                              className="inline-flex shrink-0 items-center gap-1 rounded-full border border-slate-200/80 bg-white px-2.5 py-1 text-[10px] font-semibold"
-                              title={`Project ${pNo}: ${projRoles.join(', ')}`}
+                              className="inline-flex shrink-0 items-center rounded-full border border-slate-200/80 bg-white px-2.5 py-1 text-[10px] font-bold text-slate-700"
+                              title={shortProjectNo}
                             >
-                              <span className="font-bold whitespace-nowrap text-slate-700">
-                                {pNo}
-                              </span>
-                              <span className="whitespace-nowrap text-slate-500">
-                                {projRoles.join(', ')}
-                              </span>
+                              {shortProjectNo}
                             </div>
                           );
                         })}
@@ -425,10 +430,10 @@ export function AdminPanel() {
                         type="button"
                         onClick={() => handleQuickApprove(user.email)}
                         className="h-8 px-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-sm transition-all flex items-center gap-1"
-                        title="Approve immediately"
+                        title="อนุมัติทันที"
                       >
                         <UserCheck size={14} />
-                        <span>Approve</span>
+                        <span>อนุมัติ</span>
                       </button>
                     )}
                     <button
@@ -463,7 +468,7 @@ export function AdminPanel() {
             {/* Modal Header */}
             <div className="p-6 border-b border-slate-100 flex items-center justify-between shrink-0">
               <div>
-                <h3 className="text-lg font-black text-slate-800">Assign Rights & Roles</h3>
+                <h3 className="text-lg font-black text-slate-800">กำหนดสิทธิ์และบทบาท</h3>
                 <p className="text-xs text-slate-500 font-medium">{editingUser.email}</p>
               </div>
               <button
@@ -551,7 +556,7 @@ export function AdminPanel() {
                 >
                   <div className="flex flex-wrap gap-1 items-center overflow-hidden max-w-[90%]">
                     {editRoles.length === 0 ? (
-                      <span className="text-slate-400 text-xs">Select global roles...</span>
+                      <span className="text-slate-400 text-xs">เลือกบทบาทส่วนกลาง...</span>
                     ) : (
                       editRoles.map((role) => (
                         <span
@@ -606,7 +611,7 @@ export function AdminPanel() {
               <div>
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
                   <FolderKanban size={14} />
-                  <span>Assign Project Site Clearances & Roles</span>
+                  <span>กำหนดสิทธิ์และบทบาทของโครงการ</span>
                 </label>
                 {editRoles.includes('MasterAdmin') ? (
                   <div className="p-4 bg-slate-100 border border-slate-200/50 rounded-xl text-center text-xs font-bold text-slate-500 italic">
@@ -614,7 +619,7 @@ export function AdminPanel() {
                   </div>
                 ) : (
                   <div className="space-y-3 max-h-[280px] overflow-y-auto p-2 bg-slate-50/50 border border-slate-200/50 rounded-xl">
-                    {allProjects.map((project) => {
+                    {activeProjects.map((project) => {
                       const isChecked = editProjects.includes(project.projectNo);
                       const isProjDropdownOpen = openProjectRoleDropdown === project.projectNo;
 
@@ -672,7 +677,7 @@ export function AdminPanel() {
                               >
                                 <span className="truncate max-w-[90%]">
                                   {((editProjectRoles[project.projectNo] || []).length === 0) ? (
-                                    <span className="text-slate-400 text-xs">Assign roles for this project...</span>
+                                    <span className="text-slate-400 text-xs">กำหนดบทบาทสำหรับโครงการนี้...</span>
                                   ) : (
                                     (editProjectRoles[project.projectNo] || []).join(', ')
                                   )}
@@ -719,7 +724,7 @@ export function AdminPanel() {
                         </div>
                       );
                     })}
-                    {allProjects.length === 0 && (
+                    {activeProjects.length === 0 && (
                       <div className="text-center py-4 text-xs text-slate-400 font-bold">
                         No active project sites found in the system database.
                       </div>

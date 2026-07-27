@@ -2,7 +2,6 @@ import {
   createContext,
   useContext,
   useMemo,
-  useState,
   type PropsWithChildren,
 } from 'react';
 import type { UserRole } from '../types/models';
@@ -10,9 +9,10 @@ import { useAuth } from './AuthContext';
 import { useInventory } from './InventoryContext';
 
 interface RoleContextValue {
-  activeRole: UserRole;
   roles: UserRole[];
-  setActiveRole: (role: UserRole) => void;
+  roleLabel: string;
+  hasRole: (role: UserRole) => boolean;
+  hasAnyRole: (allowedRoles: readonly UserRole[]) => boolean;
   canDispatch: boolean;
   canApproveReceipt: boolean;
   canReceiveStock: boolean;
@@ -20,13 +20,6 @@ interface RoleContextValue {
 }
 
 const RoleContext = createContext<RoleContextValue | undefined>(undefined);
-
-const SYSTEM_ROLES: UserRole[] = [
-  'Store Center',
-  'Admin Site',
-  'Store Site',
-  'Keeper',
-];
 
 const APP_ROLES: UserRole[] = [
   'MasterAdmin',
@@ -38,79 +31,99 @@ const APP_ROLES: UserRole[] = [
 ];
 
 function sanitizeRoles(roles: readonly unknown[]): UserRole[] {
-  return roles.filter(
+  return [...new Set(roles.filter(
     (role): role is UserRole =>
       typeof role === 'string' && APP_ROLES.includes(role as UserRole)
+  ))];
+}
+
+function normalizeProjectRoleKey(value: string) {
+  const normalized = value.trim().toUpperCase();
+  const projectMatch = normalized.match(
+    /(?:^|[^A-Z0-9])J[-_\s]*0*(\d+)(?:[-_\s]*([A-Z][A-Z0-9]*))?(?=$|[^A-Z0-9])/
   );
+
+  if (!projectMatch) {
+    return normalized;
+  }
+
+  const projectNumber = String(Number(projectMatch[1]));
+  const projectSuffix = projectMatch[2] ?? '';
+  return `J${projectNumber}${projectSuffix}`;
+}
+
+function getRolesForProject(
+  projectRoles: Record<string, UserRole[]>,
+  activeProjectNo: string,
+) {
+  // Prefer the exact Firestore key so similarly named projects never share roles.
+  if (Object.prototype.hasOwnProperty.call(projectRoles, activeProjectNo)) {
+    return sanitizeRoles(projectRoles[activeProjectNo] || []);
+  }
+
+  // Support legacy records that stored the same project using a different format.
+  const normalizedActiveProjectNo = normalizeProjectRoleKey(activeProjectNo);
+  const matchingEntry = Object.entries(projectRoles).find(
+    ([projectNo]) => normalizeProjectRoleKey(projectNo) === normalizedActiveProjectNo
+  );
+
+  return matchingEntry ? sanitizeRoles(matchingEntry[1]) : [];
 }
 
 export function RoleProvider({ children }: PropsWithChildren) {
   const { userProfile } = useAuth();
   const { activeProjectNo } = useInventory();
-  const [activeRole, setActiveRole] = useState<UserRole>('Store Center');
 
-  // Determine which roles are switchable based on the ACTIVE project
+  // All roles assigned for the active project are effective at the same time.
   const roles = useMemo<UserRole[]>(() => {
     if (!userProfile) {
-      return SYSTEM_ROLES;
-    }
-    
-    // MasterAdmin gets access to switch to any role globally.
-    if (userProfile.role.includes('MasterAdmin')) {
-      return [
-        'MasterAdmin',
-        'Store Center',
-        'Admin Site',
-        'Store Site',
-        'Keeper',
-        'Staff',
-      ];
+      return ['Staff'];
     }
 
-    // Get roles specific to the active project
-    if (activeProjectNo && userProfile.projectRoles) {
-      const rolesForProj = sanitizeRoles(userProfile.projectRoles[activeProjectNo] || []);
-      return rolesForProj.length > 0 ? rolesForProj : ['Staff'];
-    }
-
-    // Fallback to global roles if no project-specific roles are defined
     const globalRoles = sanitizeRoles(userProfile.role);
+
+    // MasterAdmin is a global role and is not restricted by project assignments.
+    if (globalRoles.includes('MasterAdmin')) {
+      return globalRoles;
+    }
+
+    if (activeProjectNo) {
+      const projectRoles = userProfile.projectRoles
+        ? getRolesForProject(userProfile.projectRoles, activeProjectNo)
+        : [];
+      return projectRoles.length > 0 ? projectRoles : ['Staff'];
+    }
+
     return globalRoles.length > 0 ? globalRoles : ['Staff'];
   }, [userProfile, activeProjectNo]);
 
-  // Adjust active role to match user's actual capabilities on the active project
-  useMemo(() => {
-    if (roles.length > 0 && !roles.includes(activeRole)) {
-      setActiveRole(roles[0]);
-    }
-  }, [roles, activeRole]);
+  const value = useMemo<RoleContextValue>(() => {
+    const roleSet = new Set(roles);
+    const hasRole = (role: UserRole) => roleSet.has(role);
+    const hasAnyRole = (allowedRoles: readonly UserRole[]) =>
+      allowedRoles.some((role) => roleSet.has(role));
 
-  const value = useMemo<RoleContextValue>(
-    () => {
-      const isAdmin = activeRole === 'MasterAdmin';
+    const canDispatch = hasAnyRole(['MasterAdmin', 'Store Center']);
+    const canApproveReceipt = true;
+    const canReceiveStock = hasAnyRole(['MasterAdmin', 'Store Center']);
+    const isReadOnly = !hasAnyRole([
+      'MasterAdmin',
+      'Store Center',
+      'Admin Site',
+      'Store Site',
+    ]);
 
-      const canDispatch = isAdmin || activeRole === 'Store Center';
-      
-      const canApproveReceipt = true;
-        
-      const canReceiveStock = isAdmin || activeRole === 'Store Center';
-      
-      const isReadOnly =
-        activeRole === 'Keeper' ||
-        activeRole === 'Staff';
-
-      return {
-        activeRole,
-        roles,
-        setActiveRole,
-        canDispatch,
-        canApproveReceipt,
-        canReceiveStock,
-        isReadOnly,
-      };
-    },
-    [activeRole, roles],
-  );
+    return {
+      roles,
+      roleLabel: roles.join(' + '),
+      hasRole,
+      hasAnyRole,
+      canDispatch,
+      canApproveReceipt,
+      canReceiveStock,
+      isReadOnly,
+    };
+  }, [roles]);
 
   return <RoleContext.Provider value={value}>{children}</RoleContext.Provider>;
 }

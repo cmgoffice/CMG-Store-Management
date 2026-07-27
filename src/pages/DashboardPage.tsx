@@ -10,7 +10,7 @@ import styles from './DashboardPage.module.css';
 
 export function DashboardPage() {
   const { stockItems, projects } = useInventory();
-  const { activeRole, canDispatch, canApproveReceipt } = useRole();
+  const { roleLabel, canDispatch, canApproveReceipt } = useRole();
 
   const pending = stockItems.filter((item) => item.status === 'Pending Dispatch');
   const inTransit = stockItems.filter((item) => item.status === 'In Transit');
@@ -20,19 +20,19 @@ export function DashboardPage() {
   return (
     <div>
       <PageHeader
-        eyebrow={`Active role: ${activeRole}`}
-        title="Dashboard"
-        description="Overview of central store inventory, dispatched goods, and site receiving activity."
+        eyebrow={`บทบาท: ${roleLabel}`}
+        title="แดชบอร์ด"
+        description="ภาพรวมสินค้าคงคลังส่วนกลาง การจัดส่ง และการรับสินค้าหน้างาน"
         actions={
           <>
             {canDispatch ? (
               <Link className={styles.primaryAction} to="/store/dispatch">
-                Dispatch to Site
+                จัดส่งไปยังหน้างาน
               </Link>
             ) : null}
             {canApproveReceipt ? (
               <Link className={styles.secondaryAction} to="/receiving">
-                Review Receipts
+                ตรวจสอบการรับสินค้า
               </Link>
             ) : null}
           </>
@@ -40,29 +40,25 @@ export function DashboardPage() {
       />
 
       <section className={styles.stats}>
-        <StatCard label="Stock Value" value={stockValue.toLocaleString()} detail="THB inventory" tone="pink" />
-        <StatCard label="Pending" value={pending.length} detail="Store Center" tone="purple" />
-        <StatCard label="In Transit" value={inTransit.length} detail="To project sites" tone="green" />
-        <StatCard label="Received" value={received.length} detail={`${projects.length} active projects`} tone="yellow" />
+        <StatCard label="มูลค่าสินค้าคงคลัง" value={stockValue.toLocaleString()} detail="มูลค่าสินค้า (บาท)" tone="pink" />
+        <StatCard label="รอดำเนินการ" value={pending.length} detail="คลังกลาง" tone="purple" />
+        <StatCard label="กำลังขนส่ง" value={inTransit.length} detail="ไปยังหน้างานโครงการ" tone="green" />
+        <StatCard label="รับแล้ว" value={received.length} detail={`${projects.length} โครงการที่ใช้งานอยู่`} tone="yellow" />
       </section>
 
       <section className={styles.grid}>
         <article className={styles.panel}>
           <div className={styles.panelHeader}>
-            <h2>Recent Stock Movement</h2>
-            {['MasterAdmin', 'Store Center'].includes(activeRole) && (
-              <Link to="/store/stock">View stock</Link>
+            <h2>ความเคลื่อนไหวสินค้าล่าสุด</h2>
+            {canDispatch && (
+              <Link to="/store/stock">ดูสินค้าคงคลัง</Link>
             )}
           </div>
           <div className="tableScroll">
             <table className="table">
               <thead>
                 <tr>
-                  <th>Date-Sequence</th>
-                  <th>PR No.</th>
-                  <th>Project</th>
-                  <th>Location</th>
-                  <th>Status</th>
+                  <th>วันที่-ลำดับ</th><th>เลขที่ PR</th><th>โครงการ</th><th>สถานที่</th><th>สถานะ</th>
                 </tr>
               </thead>
               <tbody>
@@ -84,20 +80,20 @@ export function DashboardPage() {
 
         <article className={styles.panel}>
           <div className={styles.panelHeader}>
-            <h2>Role Permissions</h2>
+            <h2>สิทธิ์ตามบทบาท</h2>
           </div>
           <div className={styles.permissions}>
             <div>
               <strong>Store Center</strong>
-              <span>Receive stock, view all inventory, dispatch to project sites.</span>
+              <span>รับสินค้า ดูสินค้าคงคลังทั้งหมด และจัดส่งไปยังหน้างานโครงการ</span>
             </div>
             <div>
-              <strong>Admin Site / Store Site</strong>
-              <span>Review incoming in-transit items and approve site receipt.</span>
+              <strong>ผู้ดูแลหน้างาน / คลังโครงการ</strong>
+              <span>ตรวจสอบสินค้าระหว่างขนส่งและอนุมัติการรับสินค้าหน้างาน</span>
             </div>
             <div>
               <strong>Keeper</strong>
-              <span>Read-only inventory checking with actions disabled.</span>
+              <span>ตรวจสอบสินค้าคงคลังได้อย่างเดียว โดยไม่สามารถดำเนินการได้</span>
             </div>
           </div>
         </article>

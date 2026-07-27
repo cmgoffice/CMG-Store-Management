@@ -1,11 +1,12 @@
 import { CheckCircle2, ClipboardList, History, PackageCheck, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { ITEM_TYPE_OPTIONS } from '../constants/itemTypes';
 import { PageHeader } from '../components/PageHeader';
 import { SearchField } from '../components/SearchField';
 import { StatusBadge } from '../components/StatusBadge';
 import { useInventory } from '../context/InventoryContext';
 import { useRole } from '../context/RoleContext';
-import type { DispatchRecord, ReceivingRequest } from '../types/models';
+import type { DispatchRecord, ReceivingRequest, ReceivingRequestItem, StockItem } from '../types/models';
 import '../styles/tables.css';
 import styles from './ReceivingPage.module.css';
 
@@ -37,12 +38,6 @@ function formatBadgeCount(count: number) {
   return count > 99 ? '99+' : String(count);
 }
 
-function joinItemDescriptions(items: ReceivingRequest['items']) {
-  return items
-    .map((item) => item.itemDescription?.trim() || '-')
-    .join(', ');
-}
-
 function getDispatchItemNames(items: DispatchRecord['items']) {
   return items.map((item) => item.itemDescription?.trim() || '-');
 }
@@ -50,6 +45,48 @@ function getDispatchItemNames(items: DispatchRecord['items']) {
 function createDispatchReceiveQtyDraft(record: DispatchRecord) {
   return record.items.reduce<Record<string, string>>((acc, item) => {
     acc[item.stockReceiveNo] = String(item.qty);
+    return acc;
+  }, {});
+}
+
+function createRequestReceiveQtyDraft(request: ReceivingRequest) {
+  return request.items.reduce<Record<string, string>>((acc, item, index) => {
+    acc[String(index)] = String(item.receivedQty);
+    return acc;
+  }, {});
+}
+
+function normalizeMaterialNo(value?: string) {
+  return value?.trim().toUpperCase().replace(/\s+/g, '') ?? '';
+}
+
+function getDefaultItemTypeFromMaterialNo(item: ReceivingRequestItem) {
+  const materialNo = normalizeMaterialNo(item.materialNo || item.itemNo).replace(/[^A-Z0-9]/g, '');
+  const matchedOption = [...ITEM_TYPE_OPTIONS]
+    .sort((left, right) => right.code.length - left.code.length)
+    .find((option) => materialNo.startsWith(option.code.toUpperCase().replace(/[^A-Z0-9]/g, '')));
+
+  return matchedOption?.code ?? '';
+}
+
+function findExistingStockItem(stockItems: StockItem[], request: ReceivingRequest, item: ReceivingRequestItem) {
+  const projectCode = getRequestProjectCode(request);
+  const materialNo = normalizeMaterialNo(item.materialNo || item.itemNo);
+
+  if (!projectCode || !materialNo) {
+    return undefined;
+  }
+
+  return stockItems.find((stockItem) => (
+    normalizeProjectNoText(stockItem.cmgProjectCode || stockItem.projectId) === projectCode &&
+    normalizeMaterialNo(stockItem.materialNo || stockItem.itemNo) === materialNo
+  ));
+}
+
+function createRequestItemTypeDraft(request: ReceivingRequest, stockItems: StockItem[]) {
+  return request.items.reduce<Record<string, string>>((acc, item, index) => {
+    const existingStockItem = findExistingStockItem(stockItems, request, item);
+    acc[String(index)] = existingStockItem?.itemType || item.itemType || getDefaultItemTypeFromMaterialNo(item);
     return acc;
   }, {});
 }
@@ -124,6 +161,7 @@ export function ReceivingPage() {
   const {
     projects,
     activeProjects,
+    stockItems,
     receivingRequests,
     dispatchRecords,
     approveReceivingRequest,
@@ -134,6 +172,10 @@ export function ReceivingPage() {
   const [activeTab, setActiveTab] = useState<ReceivingTab>('receive');
   const [query, setQuery] = useState('');
   const [approvingRequestId, setApprovingRequestId] = useState<string | null>(null);
+  const [receivingRequest, setReceivingRequest] = useState<ReceivingRequest | null>(null);
+  const [requestReceiveQtyDraft, setRequestReceiveQtyDraft] = useState<Record<string, string>>({});
+  const [requestItemTypeDraft, setRequestItemTypeDraft] = useState<Record<string, string>>({});
+  const [requestReceiveError, setRequestReceiveError] = useState('');
   const [approvingIncomingDispatchId, setApprovingIncomingDispatchId] = useState<string | null>(null);
   const [selectedIncomingDispatch, setSelectedIncomingDispatch] = useState<DispatchRecord | null>(null);
   const [receivingIncomingDispatch, setReceivingIncomingDispatch] = useState<DispatchRecord | null>(null);
@@ -246,13 +288,94 @@ export function ReceivingPage() {
     [approvedRequests],
   );
 
-  const handleApprove = async (requestId: string) => {
-    if (approvingRequestId) return;
-    setApprovingRequestId(requestId);
+  const openRequestReceiveModal = (request: ReceivingRequest) => {
+    setRequestReceiveError('');
+    setReceivingRequest(request);
+    setRequestReceiveQtyDraft(createRequestReceiveQtyDraft(request));
+    setRequestItemTypeDraft(createRequestItemTypeDraft(request, stockItems));
+  };
+
+  const closeRequestReceiveModal = () => {
+    if (approvingRequestId) {
+      return;
+    }
+
+    setRequestReceiveError('');
+    setReceivingRequest(null);
+    setRequestReceiveQtyDraft({});
+    setRequestItemTypeDraft({});
+  };
+
+  const handleRequestReceiveQtyChange = (itemIndex: number, value: string) => {
+    const normalizedValue = value.replace(/[^\d]/g, '');
+    setRequestReceiveQtyDraft((current) => ({
+      ...current,
+      [String(itemIndex)]: normalizedValue,
+    }));
+  };
+
+  const handleRequestItemTypeChange = (itemIndex: number, value: string) => {
+    setRequestItemTypeDraft((current) => ({
+      ...current,
+      [String(itemIndex)]: value,
+    }));
+  };
+
+  const handleConfirmRequestReceive = async () => {
+    if (!receivingRequest || approvingRequestId) {
+      return;
+    }
+
+    const receivedItems = receivingRequest.items.map((item, itemIndex) => {
+      const parsedQty = Number.parseInt(requestReceiveQtyDraft[String(itemIndex)] ?? String(item.receivedQty), 10);
+      const itemType = requestItemTypeDraft[String(itemIndex)] ?? '';
+      const existingStockItem = findExistingStockItem(stockItems, receivingRequest, item);
+      const typeOption = ITEM_TYPE_OPTIONS.find((option) => option.code === itemType);
+      return {
+        itemIndex,
+        itemDescription: item.itemDescription,
+        maxQty: item.receivedQty,
+        receivedQty: Number.isFinite(parsedQty) ? parsedQty : Number.NaN,
+        itemType,
+        itemTypeGroup: typeOption?.group ?? existingStockItem?.itemTypeGroup,
+        isExistingItem: Boolean(existingStockItem),
+      };
+    });
+    const hasInvalidQty = receivedItems.some(
+      (item) => !Number.isInteger(item.receivedQty) || item.receivedQty < 0 || item.receivedQty > item.maxQty
+    );
+
+    if (hasInvalidQty) {
+      setRequestReceiveError('กรุณาระบุจำนวนเต็มตั้งแต่ 0 ถึงจำนวนที่ขอสำหรับทุกรายการ');
+      return;
+    }
+    if (!receivedItems.some((item) => item.receivedQty > 0)) {
+      setRequestReceiveError('กรุณาระบุจำนวนรับเข้าอย่างน้อย 1 รายการ');
+      return;
+    }
+    if (receivedItems.some((item) => item.receivedQty > 0 && !item.itemTypeGroup && !item.isExistingItem)) {
+      setRequestReceiveError('กรุณาเลือก Type สำหรับทุกรายการที่รับเข้า');
+      return;
+    }
+
+    setRequestReceiveError('');
+    setApprovingRequestId(receivingRequest.id);
     try {
-      await approveReceivingRequest(requestId);
+      await approveReceivingRequest(
+        receivingRequest.id,
+        receivedItems.map(({ itemIndex, receivedQty, itemType, itemTypeGroup }) => ({
+          itemIndex,
+          receivedQty,
+          itemType,
+          itemTypeGroup,
+        }))
+      );
+      setReceivingRequest(null);
+      setRequestReceiveQtyDraft({});
+      setRequestItemTypeDraft({});
     } catch (error) {
       console.error('Failed to receive request into inventory:', error);
+      setRequestReceiveError(error instanceof Error ? error.message : 'ไม่สามารถบันทึกจำนวนรับเข้าได้ กรุณาลองใหม่');
     } finally {
       setApprovingRequestId(null);
     }
@@ -347,7 +470,7 @@ export function ReceivingPage() {
     <div>
       <PageHeader
         eyebrow="Store"
-        title="Receiving"
+        title="รับสินค้า"
         description={
           activeProject
             ? `Review receiving requests for Project ${activeProject.projectNo} and approve them into inventory.`
@@ -410,7 +533,7 @@ export function ReceivingPage() {
                 <ClipboardList size={18} />
               </div>
               <div>
-                <div className={styles.summaryLabel}>Pending Requests</div>
+                <div className={styles.summaryLabel}>คำขอที่รอดำเนินการ</div>
                 <div className={styles.summaryValue}>{pendingRequests.length}</div>
               </div>
             </article>
@@ -419,7 +542,7 @@ export function ReceivingPage() {
                 <PackageCheck size={18} />
               </div>
               <div>
-                <div className={styles.summaryLabel}>Pending Qty</div>
+                <div className={styles.summaryLabel}>จำนวนที่รอดำเนินการ</div>
                 <div className={styles.summaryValue}>
                   {pendingRequests.reduce((sum, request) => sum + request.totalQty, 0).toLocaleString()}
                 </div>
@@ -430,7 +553,7 @@ export function ReceivingPage() {
                 <History size={18} />
               </div>
               <div>
-                <div className={styles.summaryLabel}>Logged Receives</div>
+                <div className={styles.summaryLabel}>รายการรับที่บันทึกแล้ว</div>
                 <div className={styles.summaryValue}>{approvedRequests.length}</div>
               </div>
             </article>
@@ -439,14 +562,14 @@ export function ReceivingPage() {
           <section className={styles.panel}>
             <div className={styles.sectionHeader}>
               <div>
-                <h2>Pending Receiving Requests</h2>
-                <p>Requests are now grouped by CMG project code before inventory is created.</p>
+                <h2>คำขอรับสินค้าที่รอดำเนินการ</h2>
+                <p>คำขอจะถูกจัดกลุ่มตามรหัสโครงการ CMG ก่อนสร้างรายการสินค้าคงคลัง</p>
               </div>
               <div className={styles.selectionNote}>Active: {activeProject?.projectNo ?? '-'}</div>
             </div>
 
             {pendingRequestGroups.length === 0 ? (
-              <div className={styles.empty}>No pending receiving requests matched the current filters.</div>
+              <div className={styles.empty}>ไม่พบคำขอรับสินค้าที่รอดำเนินการตามเงื่อนไข</div>
             ) : pendingRequestGroups.map((group) => (
               <section key={group.projectCode} className={styles.projectGroup}>
                 <div className={styles.projectGroupHeader}>
@@ -474,36 +597,46 @@ export function ReceivingPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {group.items.map((request, index) => (
-                        <tr key={request.id}>
-                          <td>{index + 1}</td>
-                          <td>
-                            <span className={styles.receiveCode}>{request.id}</span>
-                          </td>
-                          <td>{request.prNo || '-'}</td>
-                          <td className={styles.descriptionCell}>{joinItemDescriptions(request.items)}</td>
-                          <td className="numeric">{request.totalQty.toLocaleString()}</td>
-                          <td className="numeric">{formatAmount(request.totalAmount)}</td>
-                          <td>{formatDateTime(request.requestedAt)}</td>
-                          <td>
-                            <StatusBadge status={request.requestStatus} />
-                          </td>
-                          <td>
-                            <button
-                              className={styles.approveButton}
-                              type="button"
-                              disabled={!canApproveReceipt || approvingRequestId !== null || request.items.length === 0}
-                              onClick={() => handleApprove(request.id)}
-                            >
-                              {approvingRequestId === request.id ? (
-                                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                              ) : (
-                                <CheckCircle2 size={16} />
-                              )}
-                              <span>{approvingRequestId === request.id ? 'Receiving...' : 'Receive into Inventory'}</span>
-                            </button>
-                          </td>
-                        </tr>
+                      {group.items.flatMap((request, requestIndex) => (
+                        request.items.map((item, itemIndex) => (
+                          <tr key={`${request.id}-${itemIndex}`} className={itemIndex === 0 ? styles.requestRowStart : undefined}>
+                            {itemIndex === 0 ? (
+                              <>
+                                <td rowSpan={request.items.length}>{requestIndex + 1}</td>
+                                <td rowSpan={request.items.length}>
+                                  <span className={styles.receiveCode}>{request.id}</span>
+                                </td>
+                                <td rowSpan={request.items.length} className={styles.prCell}>{request.prNo || '-'}</td>
+                              </>
+                            ) : null}
+                            <td className={styles.descriptionCell}>{item.itemDescription?.trim() || '-'}</td>
+                            <td className="numeric">{item.receivedQty.toLocaleString()}</td>
+                            <td className="numeric">{formatAmount(item.amount)}</td>
+                            {itemIndex === 0 ? (
+                              <>
+                                <td rowSpan={request.items.length}>{formatDateTime(request.requestedAt)}</td>
+                                <td rowSpan={request.items.length}>
+                                  <StatusBadge status={request.requestStatus} />
+                                </td>
+                                <td rowSpan={request.items.length}>
+                                  <button
+                                    className={styles.approveButton}
+                                    type="button"
+                                    disabled={!canApproveReceipt || approvingRequestId !== null || request.items.length === 0}
+                                    onClick={() => openRequestReceiveModal(request)}
+                                  >
+                                    {approvingRequestId === request.id ? (
+                                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                    ) : (
+                                      <CheckCircle2 size={16} />
+                                    )}
+                                    <span>{approvingRequestId === request.id ? 'Receiving...' : 'Receive into Inventory'}</span>
+                                  </button>
+                                </td>
+                              </>
+                            ) : null}
+                          </tr>
+                        ))
                       ))}
                     </tbody>
                   </table>
@@ -516,14 +649,14 @@ export function ReceivingPage() {
         <section className={styles.panel}>
           <div className={styles.sectionHeader}>
             <div>
-              <h2>Pending Project Transfers</h2>
-              <p>Dispatch requests sent to the active project are waiting here before they are received into the project store.</p>
+              <h2>รายการย้ายโครงการที่รอดำเนินการ</h2>
+              <p>รายการจัดส่งมายังโครงการปัจจุบันจะรออยู่ที่นี่ก่อนรับเข้าคลังโครงการ</p>
             </div>
             <div className={styles.selectionNote}>Active: {activeProject?.projectNo ?? '-'}</div>
           </div>
 
           {incomingDispatchGroups.length === 0 ? (
-            <div className={styles.empty}>No pending project transfer requests matched the current filters.</div>
+            <div className={styles.empty}>ไม่พบรายการย้ายโครงการตามเงื่อนไข</div>
           ) : incomingDispatchGroups.map((group) => (
             <section key={group.projectCode} className={styles.projectGroup}>
               <div className={styles.projectGroupHeader}>
@@ -608,14 +741,14 @@ export function ReceivingPage() {
         <section className={styles.panel}>
           <div className={styles.sectionHeader}>
             <div>
-              <h2>Receive History</h2>
-              <p>Approved requests stay grouped by CMG project code for easier project review.</p>
+              <h2>ประวัติการรับสินค้า</h2>
+              <p>คำขอที่อนุมัติแล้วจะแสดงเป็นกลุ่มตามรหัสโครงการ CMG เพื่อความสะดวกในการตรวจสอบ</p>
             </div>
             <div className={styles.selectionNote}>Active: {activeProject?.projectNo ?? '-'}</div>
           </div>
 
           {approvedRequestGroups.length === 0 ? (
-            <div className={styles.empty}>No receive history matched the current filters.</div>
+            <div className={styles.empty}>ไม่พบประวัติการรับสินค้าตามเงื่อนไข</div>
           ) : approvedRequestGroups.map((group) => (
             <section key={group.projectCode} className={styles.projectGroup}>
               <div className={styles.projectGroupHeader}>
@@ -641,33 +774,45 @@ export function ReceivingPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {group.items.map((request, index) => (
-                      <tr key={request.id}>
-                        <td>{index + 1}</td>
-                        <td>
-                          <span className={styles.receiveCode}>{request.id}</span>
-                        </td>
-                        <td>{request.prNo || '-'}</td>
-                        <td className={`${styles.descriptionCell} ${styles.historyDescriptionCell}`}>
-                          {joinItemDescriptions(request.items)}
-                        </td>
-                        <td>{request.receiveName || '-'}</td>
-                        <td>{request.approvedByName || '-'}</td>
-                        <td>{formatDateTime(request.approvedAt)}</td>
-                        <td>
-                          <div className={styles.itemStack}>
-                            {(request.stockReceiveNos ?? []).map((receiveNo) => (
-                              <span key={`${request.id}-${receiveNo}`} className={styles.stockChip}>
-                                {receiveNo}
-                              </span>
-                            ))}
-                            {(request.stockReceiveNos ?? []).length === 0 ? <span className={styles.noteText}>-</span> : null}
-                          </div>
-                        </td>
-                        <td>
-                          <StatusBadge status={request.requestStatus} />
-                        </td>
-                      </tr>
+                    {group.items.flatMap((request, requestIndex) => (
+                      request.items.map((item, itemIndex) => {
+                        const stockReceiveNo = item.stockReceiveNo || request.stockReceiveNos?.[itemIndex];
+                        return (
+                          <tr key={`${request.id}-${itemIndex}`} className={itemIndex === 0 ? styles.requestRowStart : undefined}>
+                            {itemIndex === 0 ? (
+                              <>
+                                <td rowSpan={request.items.length}>{requestIndex + 1}</td>
+                                <td rowSpan={request.items.length}>
+                                  <span className={styles.receiveCode}>{request.id}</span>
+                                </td>
+                                <td rowSpan={request.items.length} className={styles.prCell}>{request.prNo || '-'}</td>
+                              </>
+                            ) : null}
+                            <td className={`${styles.descriptionCell} ${styles.historyDescriptionCell}`}>
+                              {item.itemDescription?.trim() || '-'}
+                            </td>
+                            {itemIndex === 0 ? (
+                              <>
+                                <td rowSpan={request.items.length}>{request.receiveName || '-'}</td>
+                                <td rowSpan={request.items.length}>{request.approvedByName || '-'}</td>
+                                <td rowSpan={request.items.length}>{formatDateTime(request.approvedAt)}</td>
+                              </>
+                            ) : null}
+                            <td>
+                              {stockReceiveNo ? (
+                                <span className={styles.stockChip}>{stockReceiveNo}</span>
+                              ) : (
+                                <span className={styles.noteText}>-</span>
+                              )}
+                            </td>
+                            {itemIndex === 0 ? (
+                              <td rowSpan={request.items.length}>
+                                <StatusBadge status={request.requestStatus} />
+                              </td>
+                            ) : null}
+                          </tr>
+                        );
+                      })
                     ))}
                   </tbody>
                 </table>
@@ -677,13 +822,132 @@ export function ReceivingPage() {
         </section>
       )}
 
+      {receivingRequest ? (
+        <div className={styles.modalOverlay}>
+          <div className={styles.modal}>
+            <div className={styles.modalHeader}>
+              <div>
+                <h3>รับสินค้าเข้าคลัง</h3>
+                <p>ตรวจสอบและระบุจำนวนรับเข้าของแต่ละรายการก่อนบันทึก</p>
+              </div>
+              <button
+                type="button"
+                className={styles.iconButton}
+                onClick={closeRequestReceiveModal}
+                disabled={approvingRequestId === receivingRequest.id}
+                aria-label="Close receive request modal"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className={styles.modalBody}>
+              <div className={styles.detailHero}>
+                <div className={styles.modalInfo}>
+                  <span>Request ID</span>
+                  <strong>{receivingRequest.id}</strong>
+                </div>
+                <div className={styles.modalInfo}>
+                  <span>Project</span>
+                  <strong>{getRequestProjectCode(receivingRequest) || '-'}</strong>
+                </div>
+              </div>
+
+              <div className={styles.field}>
+                <span>จำนวนรับเข้าแต่ละรายการ</span>
+                <div className={styles.detailItemsTable}>
+                  <div className={`${styles.receiveFormHead} ${styles.requestReceiveFormHead}`}>
+                    <span>รหัสสินค้า</span>
+                    <span>รายการ</span>
+                    <span className={styles.numericCell}>จำนวนที่ขอ</span>
+                    <span className={styles.numericCell}>จำนวนรับเข้า</span>
+                    <span>Type</span>
+                  </div>
+                  <div className={styles.receiveItemsBody}>
+                    {receivingRequest.items.map((item, itemIndex) => {
+                      const existingStockItem = findExistingStockItem(stockItems, receivingRequest, item);
+                      const selectedItemType = requestItemTypeDraft[String(itemIndex)] ?? '';
+
+                      return (
+                      <div key={`${receivingRequest.id}-${itemIndex}`} className={`${styles.receiveFormRow} ${styles.requestReceiveFormRow}`}>
+                        <span>{item.itemNo || '-'}</span>
+                        <span>
+                          {item.itemDescription || '-'}
+                          {item.unit ? <small>{item.unit}</small> : null}
+                        </span>
+                        <span className={styles.numericCell}>{item.receivedQty.toLocaleString()}</span>
+                        <input
+                          className={styles.qtyInput}
+                          type="text"
+                          inputMode="numeric"
+                          value={requestReceiveQtyDraft[String(itemIndex)] ?? ''}
+                          onChange={(event) => handleRequestReceiveQtyChange(itemIndex, event.target.value)}
+                          placeholder="0"
+                        />
+                        <select
+                          className={styles.itemTypeSelect}
+                          value={selectedItemType}
+                          onChange={(event) => handleRequestItemTypeChange(itemIndex, event.target.value)}
+                          disabled={Boolean(existingStockItem)}
+                        >
+                          {selectedItemType && !ITEM_TYPE_OPTIONS.some((option) => option.code === selectedItemType) ? (
+                            <option value={selectedItemType}>{selectedItemType}</option>
+                          ) : null}
+                          <option value="">เลือก Type</option>
+                          <optgroup label="Type 1">
+                            {ITEM_TYPE_OPTIONS.filter((option) => option.group === 'Type 1').map((option) => (
+                              <option key={option.code} value={option.code}>{option.code} — {option.label}</option>
+                            ))}
+                          </optgroup>
+                          <optgroup label="Type 2">
+                            {ITEM_TYPE_OPTIONS.filter((option) => option.group === 'Type 2').map((option) => (
+                              <option key={option.code} value={option.code}>{option.code} — {option.label}</option>
+                            ))}
+                          </optgroup>
+                        </select>
+                      </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className={styles.modalFooter}>
+              <button
+                type="button"
+                className={styles.ghostButton}
+                onClick={closeRequestReceiveModal}
+                disabled={approvingRequestId === receivingRequest.id}
+              >
+                ยกเลิก
+              </button>
+              <button
+                type="button"
+                className={styles.primaryButton}
+                disabled={approvingRequestId === receivingRequest.id}
+                onClick={handleConfirmRequestReceive}
+              >
+                {approvingRequestId === receivingRequest.id ? (
+                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <CheckCircle2 size={16} />
+                )}
+                <span>{approvingRequestId === receivingRequest.id ? 'กำลังบันทึก...' : 'ยืนยันรับสินค้า'}</span>
+              </button>
+            </div>
+            {requestReceiveError ? <div className={styles.footerError}>{requestReceiveError}</div> : null}
+          </div>
+        </div>
+      ) : null}
+
       {selectedIncomingDispatch && !receivingIncomingDispatch ? (
         <div className={styles.modalOverlay}>
           <div className={`${styles.modal} ${styles.detailModal}`}>
             <div className={styles.modalHeader}>
               <div>
-                <h3>Dispatch Details</h3>
-                <p>Review all transferred items before receiving them into the destination project.</p>
+                <h3>รายละเอียดการจัดส่ง</h3>
+                <p>ตรวจสอบรายการที่ย้ายทั้งหมดก่อนรับเข้าคลังของโครงการปลายทาง</p>
               </div>
               <button
                 type="button"
@@ -809,8 +1073,8 @@ export function ReceivingPage() {
           <div className={`${styles.modal} ${styles.receiveModal}`}>
             <div className={styles.modalHeader}>
               <div>
-                <h3>Receive Dispatch</h3>
-                <p>Enter the actual received qty for each item. Default values match the dispatched qty.</p>
+                <h3>รับรายการจัดส่ง</h3>
+                <p>ระบุจำนวนที่รับจริงของแต่ละรายการ โดยค่าเริ่มต้นจะเท่ากับจำนวนที่จัดส่ง</p>
               </div>
               <button
                 type="button"

@@ -24,7 +24,8 @@ export type StockStatus =
 
 export type DispatchRecordStatus =
   | 'Pending Receipt'
-  | 'Received at Site';
+  | 'Received at Site'
+  | 'Dispatch Cancelled';
 
 export type WithdrawType =
   | 'issue'
@@ -34,7 +35,8 @@ export type WithdrawRecordStatus =
   | 'Issued'
   | 'Waiting Return'
   | 'Overdue'
-  | 'Returned';
+  | 'Returned'
+  | 'Cancelled';
 
 export type ReceivingRequestStatus =
   | 'pending'
@@ -62,6 +64,8 @@ export interface StockItem {
   sourceReceiveNo?: string;
   rpNo?: string;
   receiveType?: string;
+  itemType?: string;
+  itemTypeGroup?: 'Type 1' | 'Type 2';
   iditem?: string;
   materialNo?: string;
   unit?: string;
@@ -93,6 +97,8 @@ export interface ReceivingRequestItem {
   materialNo?: string;
   photos?: string[];
   stockReceiveNo?: string;
+  itemType?: string;
+  itemTypeGroup?: 'Type 1' | 'Type 2';
 }
 
 export interface ReceivingRequest {
@@ -132,12 +138,17 @@ export interface ReceivingRequest {
 
 export interface DispatchItemSnapshot {
   stockItemId?: string;
+  sourceStockItemId?: string;
+  destinationStockItemId?: string;
   receiveNo: string;
   stockReceiveNo: string;
   prNo: string;
   poNo: string;
   itemNo: string;
   itemDescription: string;
+  materialNo?: string;
+  unit?: string;
+  amount?: number;
   qty: number;
   receivedQty?: number;
   vendorName: string;
@@ -165,6 +176,10 @@ export interface DispatchRecord {
   receivedByName?: string;
   receivedByEmail?: string;
   totalReceivedQty?: number;
+  cancelledAt?: string;
+  cancelledByUid?: string;
+  cancelledByName?: string;
+  cancelledByEmail?: string;
 }
 
 export interface WithdrawItemSnapshot {
@@ -204,6 +219,10 @@ export interface WithdrawRecord {
   returnedByUid?: string;
   returnedByName?: string;
   returnedByEmail?: string;
+  cancelledAt?: string;
+  cancelledByUid?: string;
+  cancelledByName?: string;
+  cancelledByEmail?: string;
   itemReceiveNos: string[];
   items: WithdrawItemSnapshot[];
   totalQty: number;

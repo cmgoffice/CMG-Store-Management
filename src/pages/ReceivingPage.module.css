@@ -204,6 +204,14 @@
   width: 100%;
 }
 
+.requestRowStart td {
+  border-top-color: #cbd8ea;
+}
+
+.receivingTable td[rowspan] {
+  background: #fbfdff;
+}
+
 .historyTable {
   min-width: 1260px;
 }
@@ -365,10 +373,20 @@
 }
 
 .descriptionCell {
+  min-width: 0;
   max-width: 0;
   color: #23436c;
   line-height: 1.4;
+  white-space: normal !important;
   overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.prCell {
+  min-width: 0;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .historyTable td.historyDescriptionCell {
@@ -729,6 +747,11 @@
   grid-template-columns: 170px minmax(0, 1fr) 90px 120px;
 }
 
+.requestReceiveFormHead,
+.requestReceiveFormRow {
+  grid-template-columns: 130px minmax(180px, 1fr) 90px 120px minmax(180px, 1fr);
+}
+
 .receiveItemRow,
 .receiveFormRow {
   border-top: 1px solid #edf3fb;
@@ -771,6 +794,34 @@
   border-color: #0b5cad;
   background: #fff;
   box-shadow: 0 0 0 3px rgb(11 92 173 / 14%);
+}
+
+.itemTypeSelect {
+  width: 100%;
+  min-height: 40px;
+  border: 1px solid #b8c9e3;
+  border-radius: 12px;
+  background: #f8fbff;
+  color: #123257;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 10px;
+}
+
+.itemTypeSelect:focus {
+  outline: none;
+  border-color: #0b5cad;
+  background: #fff;
+  box-shadow: 0 0 0 3px rgb(11 92 173 / 14%);
+}
+
+.itemTypeSelect:disabled {
+  cursor: not-allowed;
+  border-color: #d5dde9;
+  background: #eef2f7;
+  color: #52657b;
+  opacity: 1;
 }
 
 .detailTextBlock {

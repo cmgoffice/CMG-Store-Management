@@ -15,7 +15,7 @@ export function SearchField({ value, onChange, placeholder }: SearchFieldProps) 
         type="search"
         value={value}
         onChange={(event) => onChange(event.target.value)}
-        placeholder={placeholder ?? 'Search'}
+        placeholder={placeholder ?? 'ค้นหา'}
       />
     </label>
   );

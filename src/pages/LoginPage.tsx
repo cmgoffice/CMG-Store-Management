@@ -98,7 +98,7 @@ export function LoginPage() {
           <div className="inline-flex items-center justify-center w-14 h-14 bg-gradient-to-tr from-[#6e42f4] to-[#4f2ed9] rounded-2xl text-white shadow-lg shadow-purple-200 mb-4 animate-bounce">
             <LogIn size={26} />
           </div>
-          <h1 className="text-2xl font-extrabold text-[#141b2b] tracking-tight">CMG Store</h1>
+          <h1 className="text-2xl font-extrabold text-[#141b2b] tracking-tight">คลังสินค้า CMG</h1>
           <p className="text-xs text-[#404752] mt-1.5 font-medium uppercase tracking-wider">
             Enterprise Security Portal
           </p>
@@ -116,13 +116,13 @@ export function LoginPage() {
         <form onSubmit={handleEmailLogin} className="space-y-5">
           <div>
             <label className="block text-xs font-bold text-[#404752] uppercase mb-2 tracking-wider">
-              Email Address
+              อีเมล
             </label>
             <div className="relative">
               <Mail className="absolute left-4 top-1/2 -translate-y-1/2 text-purple-400" size={18} />
               <input
                 type="email"
-                placeholder="enter your email..."
+                placeholder="กรอกอีเมล..."
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 disabled={loading}
@@ -134,13 +134,13 @@ export function LoginPage() {
 
           <div>
             <label className="block text-xs font-bold text-[#404752] uppercase mb-2 tracking-wider">
-              Password
+              รหัสผ่าน
             </label>
             <div className="relative">
               <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-purple-400" size={18} />
               <input
                 type="password"
-                placeholder="enter your password..."
+                placeholder="กรอกรหัสผ่าน..."
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={loading}
@@ -158,7 +158,7 @@ export function LoginPage() {
             {loading ? (
               <span className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
             ) : (
-              'Sign In with Password'
+              'เข้าสู่ระบบด้วยรหัสผ่าน'
             )}
           </button>
         </form>
@@ -167,7 +167,7 @@ export function LoginPage() {
         <div className="relative flex py-5 items-center my-2">
           <div className="flex-grow border-t border-slate-200"></div>
           <span className="flex-shrink mx-4 text-xs font-bold text-[#8d879b] uppercase tracking-wider">
-            OR
+            หรือ
           </span>
           <div className="flex-grow border-t border-slate-200"></div>
         </div>
@@ -180,18 +180,18 @@ export function LoginPage() {
           className="w-full h-12 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 font-bold text-sm rounded-xl shadow-sm active:scale-[0.99] transition-all flex items-center justify-center gap-3"
         >
           <Chrome className="text-red-500" size={18} />
-          <span>Continue with Google</span>
+          <span>ดำเนินการต่อด้วย Google</span>
         </button>
 
         {/* Register Redirect Link */}
         <div className="text-center mt-8">
           <p className="text-xs text-[#404752] font-semibold">
-            Don't have an enterprise account?{' '}
+            ยังไม่มีบัญชีผู้ใช้?{' '}
             <Link
               to="/register"
               className="text-[#6e42f4] hover:underline font-bold"
             >
-              Sign Up Now
+              สมัครใช้งาน
             </Link>
           </p>
         </div>

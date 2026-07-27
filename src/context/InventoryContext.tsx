@@ -11,8 +11,8 @@ import {
   collection,
   doc,
   type DocumentData,
+  runTransaction,
   setDoc,
-  writeBatch,
   onSnapshot,
 } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
@@ -34,6 +34,10 @@ import type {
   WithdrawType,
 } from '../types/models';
 import { getStockItemId } from '../utils/stockItem';
+import {
+  createStockIdentityDocumentId,
+  normalizeMaterialNo,
+} from '../utils/stockIdentity';
 import { useAuth } from './AuthContext';
 
 interface CreateDispatchLineInput {
@@ -53,6 +57,13 @@ interface CreateDispatchInput {
 interface ReceiveDispatchLineInput {
   stockReceiveNo: string;
   receivedQty: number;
+}
+
+interface ApproveReceivingRequestLineInput {
+  itemIndex: number;
+  receivedQty: number;
+  itemType?: string;
+  itemTypeGroup?: 'Type 1' | 'Type 2';
 }
 
 interface CreateWithdrawLineInput {
@@ -81,10 +92,12 @@ interface InventoryContextValue {
   withdrawRecords: WithdrawRecord[];
   updateProjectStatus: (projectNo: string, status: ProjectStatus) => Promise<void>;
   createDispatch: (input: CreateDispatchInput) => Promise<void>;
+  cancelDispatch: (dispatchId: string) => Promise<void>;
   createWithdraw: (input: CreateWithdrawInput) => Promise<void>;
   returnWithdraw: (withdrawId: string) => Promise<void>;
+  cancelWithdraw: (withdrawId: string) => Promise<void>;
   approveReceipt: (receiveNo: string) => Promise<void>;
-  approveReceivingRequest: (requestId: string) => Promise<void>;
+  approveReceivingRequest: (requestId: string, receivedItems?: ApproveReceivingRequestLineInput[]) => Promise<void>;
   receiveDispatch: (dispatchId: string, receivedItems?: ReceiveDispatchLineInput[]) => Promise<void>;
   receiveNewItem: (item: StockItem) => Promise<void>;
   receivePrPoPayload: (payload: PrPoReceivePayload) => Promise<PrPoReceiveResponse>;
@@ -146,6 +159,10 @@ function normalizeWithdrawRecordStatus(value: unknown): WithdrawRecordStatus {
 
   if (normalized === 'returned') {
     return 'Returned';
+  }
+
+  if (normalized === 'cancelled' || normalized === 'canceled') {
+    return 'Cancelled';
   }
 
   return 'Issued';
@@ -405,6 +422,8 @@ function normalizeReceivingRequestItem(data: DocumentData, index: number): Recei
     materialNo,
     photos: normalizeStringArray(data.photos),
     stockReceiveNo: normalizeText(data.stockReceiveNo),
+    itemType: normalizeText(data.itemType),
+    itemTypeGroup: normalizeText(data.itemTypeGroup) === 'Type 2' ? 'Type 2' : normalizeText(data.itemTypeGroup) === 'Type 1' ? 'Type 1' : undefined,
   };
 }
 
@@ -488,6 +507,8 @@ function normalizeStockItem(data: DocumentData, fallbackId: string): StockItem {
     sourceReceiveNo: normalizeText(data.sourceReceiveNo),
     rpNo: normalizeText(data.rpNo),
     receiveType: normalizeText(data.receiveType),
+    itemType: normalizeText(data.itemType),
+    itemTypeGroup: normalizeText(data.itemTypeGroup) === 'Type 2' ? 'Type 2' : normalizeText(data.itemTypeGroup) === 'Type 1' ? 'Type 1' : undefined,
     iditem: normalizeText(data.iditem),
     materialNo: normalizeText(data.materialNo),
     unit: normalizeText(data.unit),
@@ -518,6 +539,42 @@ function normalizeStockItem(data: DocumentData, fallbackId: string): StockItem {
         : normalizeNumber(data.lastReceivedQty),
     lastReceivedAt: normalizeDateText(data.lastReceivedAt),
   };
+}
+
+function getStockItemMaterialNo(item: Pick<StockItem, 'materialNo' | 'itemNo'>) {
+  return normalizeMaterialNo(item.materialNo || item.itemNo);
+}
+
+function findStockItemByIdentity(
+  stockItems: StockItem[],
+  projectNo: string,
+  materialNo: string,
+  excludedIds: string[] = [],
+) {
+  const normalizedProjectNo = normalizeProjectNoText(projectNo);
+  const normalizedMaterialNo = normalizeMaterialNo(materialNo);
+  const excludedIdSet = new Set(excludedIds);
+
+  if (!normalizedProjectNo || !normalizedMaterialNo) {
+    return undefined;
+  }
+
+  const deterministicId = createStockIdentityDocumentId(normalizedProjectNo, normalizedMaterialNo);
+
+  return stockItems
+    .filter((item) => (
+      !excludedIdSet.has(getStockItemId(item)) &&
+      item.status !== 'In Transit' &&
+      getStockItemProjectNo(item) === normalizedProjectNo &&
+      getStockItemMaterialNo(item) === normalizedMaterialNo
+    ))
+    .sort((left, right) => {
+      const leftId = getStockItemId(left);
+      const rightId = getStockItemId(right);
+      const leftScore = Number(Boolean(left.materialNo)) * 2 + Number(leftId === deterministicId);
+      const rightScore = Number(Boolean(right.materialNo)) * 2 + Number(rightId === deterministicId);
+      return rightScore - leftScore || leftId.localeCompare(rightId);
+    })[0];
 }
 
 function normalizeWithdrawRecord(data: DocumentData, fallbackId: string): WithdrawRecord {
@@ -578,6 +635,10 @@ function normalizeWithdrawRecord(data: DocumentData, fallbackId: string): Withdr
     returnedByUid: normalizeText(data.returnedByUid),
     returnedByName: normalizeText(data.returnedByName),
     returnedByEmail: normalizeText(data.returnedByEmail),
+    cancelledAt: normalizeDateText(data.cancelledAt),
+    cancelledByUid: normalizeText(data.cancelledByUid),
+    cancelledByName: normalizeText(data.cancelledByName),
+    cancelledByEmail: normalizeText(data.cancelledByEmail),
     itemReceiveNos: normalizeStringArray(data.itemReceiveNos),
     items,
     totalQty: normalizeNumber(data.totalQty, items.reduce((sum, item) => sum + item.qty, 0)),
@@ -830,6 +891,44 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     [visibleProjects]
   );
 
+  const visibleStockItems = useMemo(() => {
+    if (!userProfile) {
+      return [];
+    }
+
+    if (
+      userProfile.role.includes('MasterAdmin') ||
+      userProfile.role.includes('Store Center')
+    ) {
+      return items;
+    }
+
+    const assigned = userProfile.assignedProjects || [];
+    return items.filter((item) => {
+      const projectNo = getStockItemProjectNo(item);
+      return assigned.some((assignedProjectNo) => projectNoMatches(assignedProjectNo, projectNo));
+    });
+  }, [items, userProfile]);
+
+  const visibleReceivingRequests = useMemo(() => {
+    if (!userProfile) {
+      return [];
+    }
+
+    if (
+      userProfile.role.includes('MasterAdmin') ||
+      userProfile.role.includes('Store Center')
+    ) {
+      return receivingRequestList;
+    }
+
+    const assigned = userProfile.assignedProjects || [];
+    return receivingRequestList.filter((request) => {
+      const projectNo = normalizeProjectNoFromRequest(request);
+      return assigned.some((assignedProjectNo) => projectNoMatches(assignedProjectNo, projectNo));
+    });
+  }, [receivingRequestList, userProfile]);
+
   const visibleDispatchRecords = useMemo(() => {
     if (!userProfile) {
       return [];
@@ -909,6 +1008,9 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     if (!normalizedLines.length) {
       throw new Error('Please select at least one item and enter dispatch qty greater than 0.');
     }
+    if (new Set(normalizedLines.map((line) => line.receiveNo)).size !== normalizedLines.length) {
+      throw new Error('The same stock item cannot be added to one dispatch more than once.');
+    }
 
     const sourceProject = projectList.find((project) => projectNoMatches(project.projectNo, sourceProjectNo));
     const targetProject = projectList.find((project) => projectNoMatches(project.projectNo, projectNo));
@@ -966,87 +1068,188 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       })
     );
 
-    const dispatchSnapshots = selectedItems.map(({ line, sourceItem }, index) => ({
-      receiveNo: sourceItem.receiveNo,
-      stockItemId:
-        line.qty === sourceItem.qty
-          ? getStockItemId(sourceItem)
-          : createDispatchStockReceiveNo(getStockItemId(sourceItem), dispatchNo, index),
-      stockReceiveNo:
-        line.qty === sourceItem.qty
-          ? getStockItemId(sourceItem)
-          : createDispatchStockReceiveNo(getStockItemId(sourceItem), dispatchNo, index),
-      prNo: sourceItem.prNo,
-      poNo: sourceItem.poNo,
-      itemNo: sourceItem.itemNo,
-      itemDescription: sourceItem.itemDescription,
-      qty: line.qty,
-      vendorName: sourceItem.vendorName,
-      sourceLocation: sourceItem.location,
-    }));
+    const dispatchRef = doc(db, APP_NAME, 'root', 'dispatchRecords', dispatchId);
+    await runTransaction(db, async (transaction) => {
+      const sourceRefs = selectedItems.map(({ sourceItem }) => (
+        doc(db, APP_NAME, 'root', 'stockItems', getStockItemId(sourceItem))
+      ));
+      const sourceSnapshots = await Promise.all(sourceRefs.map((sourceRef) => transaction.get(sourceRef)));
+      const dispatchSnapshots = selectedItems.map(({ line }, index) => {
+        const sourceSnapshot = sourceSnapshots[index];
+        if (!sourceSnapshot.exists()) {
+          throw new Error(`Item ${line.receiveNo} could not be found. Please refresh and try again.`);
+        }
 
-    const record: DispatchRecord = {
-      id: dispatchId,
-      dispatchNo,
-      sourceProjectNo: sourceProject.projectNo,
-      sourceProjectName: sourceProject.projectName,
-      destinationProjectNo: targetProject.projectNo,
-      destinationProjectName: targetProject.projectName,
-      status: 'Pending Receipt',
-      itemReceiveNos: dispatchSnapshots.map((item) => item.stockReceiveNo),
-      items: dispatchSnapshots,
-      totalQty: dispatchSnapshots.reduce((sum, item) => sum + item.qty, 0),
-      transport: transport.trim(),
-      note: note.trim(),
-      photoUrls,
-      dispatchedAt,
-      dispatchedByName,
-      dispatchedByEmail,
-    };
+        const currentSourceItem = normalizeStockItem(sourceSnapshot.data(), sourceSnapshot.id);
+        if (getStockItemProjectNo(currentSourceItem) !== normalizedSourceProjectNo) {
+          throw new Error(`Item ${currentSourceItem.receiveNo} is not in the active source project.`);
+        }
+        if (currentSourceItem.qty <= 0 || currentSourceItem.status === 'In Transit') {
+          throw new Error(`Item ${currentSourceItem.receiveNo} is not available for dispatch.`);
+        }
+        if (line.qty > currentSourceItem.qty) {
+          throw new Error(`Dispatch qty for ${currentSourceItem.receiveNo} is greater than available qty.`);
+        }
 
-    const batch = writeBatch(db);
-    selectedItems.forEach(({ line, sourceItem }, index) => {
-      const sourceRef = doc(db, APP_NAME, 'root', 'stockItems', getStockItemId(sourceItem));
-      const dispatchedAmount = calculatePartialAmount(sourceItem.amount, sourceItem.qty, line.qty);
-      const remainingQty = sourceItem.qty - line.qty;
-      const remainingAmount = roundAmount(sourceItem.amount - dispatchedAmount);
+        const sourceStockItemId = getStockItemId(currentSourceItem);
+        const stockReceiveNo = createDispatchStockReceiveNo(sourceStockItemId, dispatchNo, index);
+        const dispatchedAmount = calculatePartialAmount(currentSourceItem.amount, currentSourceItem.qty, line.qty);
 
-      if (remainingQty <= 0) {
-        batch.update(sourceRef, {
-          status: 'In Transit',
-          location: createTransitLocation(projectNo),
-          purchasedForProject: createProjectLabel(projectNo),
-          cmgProjectCode: projectNo,
-        });
-        return;
-      }
-
-      batch.update(sourceRef, {
-        qty: remainingQty,
-        amount: remainingAmount,
+        return {
+          sourceItem: currentSourceItem,
+          sourceStockItemId,
+          receiveNo: currentSourceItem.receiveNo,
+          stockItemId: stockReceiveNo,
+          stockReceiveNo,
+          prNo: currentSourceItem.prNo,
+          poNo: currentSourceItem.poNo,
+          itemNo: currentSourceItem.itemNo,
+          itemDescription: currentSourceItem.itemDescription,
+          materialNo: getStockItemMaterialNo(currentSourceItem),
+          unit: currentSourceItem.unit,
+          amount: dispatchedAmount,
+          qty: line.qty,
+          vendorName: currentSourceItem.vendorName,
+          sourceLocation: currentSourceItem.location,
+        };
       });
 
-      const dispatchedItemId = dispatchSnapshots[index].stockReceiveNo;
-      const dispatchedItemRef = doc(db, APP_NAME, 'root', 'stockItems', dispatchedItemId);
-      const dispatchedItem: StockItem = {
-        ...sourceItem,
-        stockItemId: dispatchedItemId,
-        receiveNo: dispatchedItemId,
-        qty: line.qty,
-        amount: dispatchedAmount,
-        location: createTransitLocation(projectNo),
-        purchasedForProject: createProjectLabel(projectNo),
-        cmgProjectCode: projectNo,
-        status: 'In Transit',
+      dispatchSnapshots.forEach(({ sourceItem, sourceStockItemId, amount, ...snapshot }) => {
+        const sourceRef = doc(db, APP_NAME, 'root', 'stockItems', sourceStockItemId);
+        const transitRef = doc(db, APP_NAME, 'root', 'stockItems', snapshot.stockReceiveNo);
+        const remainingQty = sourceItem.qty - snapshot.qty;
+        const remainingAmount = roundAmount(sourceItem.amount - amount);
+
+        transaction.update(sourceRef, {
+          qty: Math.max(0, remainingQty),
+          amount: Math.max(0, remainingAmount),
+          lastDispatchNo: dispatchNo,
+          lastDispatchedAt: dispatchedAt,
+        });
+        transaction.set(
+          transitRef,
+          stripUndefined({
+            ...sourceItem,
+            stockItemId: snapshot.stockReceiveNo,
+            receiveNo: snapshot.stockReceiveNo,
+            sourceStockItemId,
+            qty: snapshot.qty,
+            amount,
+            location: createTransitLocation(targetProject.projectNo),
+            purchasedForProject: createProjectLabel(targetProject.projectNo),
+            cmgProjectCode: normalizeProjectNoText(targetProject.projectNo),
+            status: 'In Transit',
+            lastDispatchNo: dispatchNo,
+            lastDispatchedAt: dispatchedAt,
+          })
+        );
+      });
+
+      const record: DispatchRecord = {
+        id: dispatchId,
+        dispatchNo,
+        sourceProjectNo: sourceProject.projectNo,
+        sourceProjectName: sourceProject.projectName,
+        destinationProjectNo: targetProject.projectNo,
+        destinationProjectName: targetProject.projectName,
+        status: 'Pending Receipt',
+        itemReceiveNos: dispatchSnapshots.map((item) => item.stockReceiveNo),
+        items: dispatchSnapshots.map(({ sourceItem: _sourceItem, ...snapshot }) => snapshot),
+        totalQty: dispatchSnapshots.reduce((sum, item) => sum + item.qty, 0),
+        transport: transport.trim(),
+        note: note.trim(),
+        photoUrls,
+        dispatchedAt,
+        dispatchedByName,
+        dispatchedByEmail,
       };
 
-      batch.set(dispatchedItemRef, stripUndefined(dispatchedItem));
+      transaction.set(dispatchRef, stripUndefined(record));
     });
-
-    const dispatchRef = doc(db, APP_NAME, 'root', 'dispatchRecords', dispatchId);
-    batch.set(dispatchRef, stripUndefined(record));
-    await batch.commit();
   }, [items, projectList, userProfile]);
+
+  const cancelDispatch = useCallback(async (dispatchId: string) => {
+    const target = dispatchList.find((record) => record.id === dispatchId);
+    if (!target || target.status !== 'Pending Receipt') {
+      return;
+    }
+
+    const cancelledAt = new Date().toISOString();
+    const cancelledByName = formatPersonName(
+      userProfile?.firstName,
+      userProfile?.lastName,
+      userProfile?.email ?? 'Store Center'
+    );
+    const cancelledByEmail = userProfile?.email ?? 'unknown@cmg.local';
+    const cancelledByUid = userProfile?.uid ?? '';
+    const dispatchRef = doc(db, APP_NAME, 'root', 'dispatchRecords', dispatchId);
+
+    await runTransaction(db, async (transaction) => {
+      const dispatchSnapshot = await transaction.get(dispatchRef);
+      if (!dispatchSnapshot.exists()) {
+        throw new Error(`Dispatch ${dispatchId} could not be found.`);
+      }
+      if (normalizeText(dispatchSnapshot.data().status) !== 'Pending Receipt') {
+        throw new Error('This dispatch can no longer be cancelled.');
+      }
+
+      const stockIds = Array.from(new Set(target.items.flatMap((item) => [
+        item.sourceStockItemId || item.stockItemId || item.receiveNo,
+        item.stockReceiveNo,
+      ])));
+      const stockSnapshots = await Promise.all(
+        stockIds.map((stockItemId) => transaction.get(doc(db, APP_NAME, 'root', 'stockItems', stockItemId)))
+      );
+      const stockSnapshotById = new Map(stockIds.map((stockItemId, index) => [stockItemId, stockSnapshots[index]]));
+
+      target.items.forEach((item) => {
+        const sourceStockItemId = item.sourceStockItemId || item.stockItemId || item.receiveNo;
+        const sourceSnapshot = stockSnapshotById.get(sourceStockItemId);
+        const transitSnapshot = stockSnapshotById.get(item.stockReceiveNo);
+
+        if (!transitSnapshot?.exists()) {
+          throw new Error(`In-transit item ${item.stockReceiveNo} could not be found.`);
+        }
+
+        const transitItem = normalizeStockItem(transitSnapshot.data(), transitSnapshot.id);
+        const sourceItem = sourceSnapshot?.exists()
+          ? normalizeStockItem(sourceSnapshot.data(), sourceSnapshot.id)
+          : undefined;
+        const sourceRef = doc(db, APP_NAME, 'root', 'stockItems', sourceStockItemId);
+
+        transaction.set(
+          sourceRef,
+          stripUndefined({
+            ...(sourceItem ?? transitItem),
+            stockItemId: sourceStockItemId,
+            receiveNo: sourceItem?.receiveNo || item.receiveNo,
+            qty: (sourceItem?.qty ?? 0) + transitItem.qty,
+            amount: roundAmount((sourceItem?.amount ?? 0) + transitItem.amount),
+            location: sourceItem?.location || item.sourceLocation,
+            purchasedForProject: sourceItem?.purchasedForProject || createProjectLabel(target.sourceProjectNo),
+            cmgProjectCode: sourceItem?.cmgProjectCode || normalizeProjectNoText(target.sourceProjectNo),
+            status: sourceItem?.status === 'In Transit' ? 'Received at Site' : (sourceItem?.status ?? 'Received at Site'),
+            lastCancelledDispatchNo: target.dispatchNo,
+            lastCancelledDispatchAt: cancelledAt,
+          }),
+          { merge: true }
+        );
+        transaction.delete(doc(db, APP_NAME, 'root', 'stockItems', item.stockReceiveNo));
+      });
+
+      transaction.set(
+        dispatchRef,
+        {
+          status: 'Dispatch Cancelled',
+          cancelledAt,
+          cancelledByUid,
+          cancelledByName,
+          cancelledByEmail,
+        },
+        { merge: true }
+      );
+    });
+  }, [dispatchList, userProfile]);
 
   const createWithdraw = useCallback(async ({
     projectNo,
@@ -1099,6 +1302,9 @@ export function InventoryProvider({ children }: PropsWithChildren) {
 
     if (!normalizedLines.length) {
       throw new Error('Please select at least one item and enter withdraw qty greater than 0.');
+    }
+    if (new Set(normalizedLines.map((line) => line.receiveNo)).size !== normalizedLines.length) {
+      throw new Error('The same stock item cannot be added to one withdrawal more than once.');
     }
 
     const selectedItems = normalizedLines.map((line) => {
@@ -1153,75 +1359,94 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       })
     );
 
-    const withdrawSnapshots = selectedItems.map(({ line, sourceItem }) => {
-      const stockItemId = getStockItemId(sourceItem);
-      const withdrawAmount = calculatePartialAmount(sourceItem.amount, sourceItem.qty, line.qty);
-
-      return {
-        stockItemId,
-        receiveNo: sourceItem.receiveNo,
-        prNo: sourceItem.prNo,
-        poNo: sourceItem.poNo,
-        itemNo: sourceItem.itemNo,
-        itemDescription: sourceItem.itemDescription,
-        qty: line.qty,
-        returnedQty: normalizedType === 'borrow' ? 0 : undefined,
-        amount: withdrawAmount,
-        unit: sourceItem.unit,
-        vendorName: sourceItem.vendorName,
-        sourceLocation: sourceItem.location,
-        originalStatus: sourceItem.status,
-        stockItemSnapshot: sourceItem,
-      };
-    });
-
-    const record: WithdrawRecord = {
-      id: withdrawId,
-      withdrawNo,
-      projectNo: sourceProject.projectNo,
-      projectShortNo: getProjectShortNo(sourceProject.projectNo),
-      projectName: sourceProject.projectName,
-      type: normalizedType,
-      status: normalizedType === 'borrow' ? 'Waiting Return' : 'Issued',
-      requesterName: requesterName.trim(),
-      requesterPhone: requesterPhone.trim(),
-      issuedByUid,
-      issuedByName,
-      issuedByEmail,
-      withdrawDate: withdrawDate.trim(),
-      purpose: purpose.trim(),
-      dueDate: normalizedType === 'borrow' ? dueDate?.trim() : undefined,
-      itemReceiveNos: withdrawSnapshots.map((item) => item.stockItemId),
-      items: withdrawSnapshots,
-      totalQty: withdrawSnapshots.reduce((sum, item) => sum + item.qty, 0),
-      photoUrls,
-      createdAt,
-    };
-
-    const batch = writeBatch(db);
-    selectedItems.forEach(({ line, sourceItem }) => {
-      const sourceRef = doc(db, APP_NAME, 'root', 'stockItems', getStockItemId(sourceItem));
-      const withdrawnAmount = calculatePartialAmount(sourceItem.amount, sourceItem.qty, line.qty);
-      const remainingQty = sourceItem.qty - line.qty;
-      const remainingAmount = roundAmount(sourceItem.amount - withdrawnAmount);
-
-      batch.update(sourceRef, {
-        qty: Math.max(0, remainingQty),
-        amount: Math.max(0, remainingAmount),
-        status:
-          remainingQty <= 0
-            ? normalizedType === 'borrow'
-              ? 'Borrowed'
-              : 'Withdrawn'
-            : sourceItem.status,
-        lastWithdrawNo: withdrawNo,
-        lastWithdrawAt: createdAt,
-      });
-    });
-
     const withdrawRef = doc(db, APP_NAME, 'root', 'withdrawRecords', withdrawId);
-    batch.set(withdrawRef, stripUndefined(record));
-    await batch.commit();
+    await runTransaction(db, async (transaction) => {
+      const sourceRefs = selectedItems.map(({ sourceItem }) => (
+        doc(db, APP_NAME, 'root', 'stockItems', getStockItemId(sourceItem))
+      ));
+      const sourceSnapshots = await Promise.all(sourceRefs.map((sourceRef) => transaction.get(sourceRef)));
+      const withdrawSnapshots = selectedItems.map(({ line }, index) => {
+        const sourceSnapshot = sourceSnapshots[index];
+        if (!sourceSnapshot.exists()) {
+          throw new Error(`Item ${line.receiveNo} could not be found. Please refresh and try again.`);
+        }
+
+        const sourceItem = normalizeStockItem(sourceSnapshot.data(), sourceSnapshot.id);
+        if (getStockItemProjectNo(sourceItem) !== normalizedProjectNo) {
+          throw new Error(`Item ${sourceItem.receiveNo} is not in the active project store.`);
+        }
+        if (
+          sourceItem.qty <= 0 ||
+          sourceItem.status === 'In Transit' ||
+          sourceItem.status === 'Borrowed' ||
+          sourceItem.status === 'Withdrawn'
+        ) {
+          throw new Error(`Item ${sourceItem.receiveNo} is not available for withdrawal.`);
+        }
+        if (line.qty > sourceItem.qty) {
+          throw new Error(`Withdraw qty for ${sourceItem.receiveNo} is greater than available qty.`);
+        }
+
+        const stockItemId = getStockItemId(sourceItem);
+        const withdrawAmount = calculatePartialAmount(sourceItem.amount, sourceItem.qty, line.qty);
+        const remainingQty = sourceItem.qty - line.qty;
+        const remainingAmount = roundAmount(sourceItem.amount - withdrawAmount);
+
+        transaction.update(sourceRefs[index], {
+          qty: Math.max(0, remainingQty),
+          amount: Math.max(0, remainingAmount),
+          status:
+            remainingQty <= 0
+              ? normalizedType === 'borrow'
+                ? 'Borrowed'
+                : 'Withdrawn'
+              : sourceItem.status,
+          lastWithdrawNo: withdrawNo,
+          lastWithdrawAt: createdAt,
+        });
+
+        return {
+          stockItemId,
+          receiveNo: sourceItem.receiveNo,
+          prNo: sourceItem.prNo,
+          poNo: sourceItem.poNo,
+          itemNo: sourceItem.itemNo,
+          itemDescription: sourceItem.itemDescription,
+          qty: line.qty,
+          returnedQty: normalizedType === 'borrow' ? 0 : undefined,
+          amount: withdrawAmount,
+          unit: sourceItem.unit,
+          vendorName: sourceItem.vendorName,
+          sourceLocation: sourceItem.location,
+          originalStatus: sourceItem.status,
+          stockItemSnapshot: sourceItem,
+        };
+      });
+      const record: WithdrawRecord = {
+        id: withdrawId,
+        withdrawNo,
+        projectNo: sourceProject.projectNo,
+        projectShortNo: getProjectShortNo(sourceProject.projectNo),
+        projectName: sourceProject.projectName,
+        type: normalizedType,
+        status: normalizedType === 'borrow' ? 'Waiting Return' : 'Issued',
+        requesterName: requesterName.trim(),
+        requesterPhone: requesterPhone.trim(),
+        issuedByUid,
+        issuedByName,
+        issuedByEmail,
+        withdrawDate: withdrawDate.trim(),
+        purpose: purpose.trim(),
+        dueDate: normalizedType === 'borrow' ? dueDate?.trim() : undefined,
+        itemReceiveNos: withdrawSnapshots.map((item) => item.stockItemId),
+        items: withdrawSnapshots,
+        totalQty: withdrawSnapshots.reduce((sum, item) => sum + item.qty, 0),
+        photoUrls,
+        createdAt,
+      };
+
+      transaction.set(withdrawRef, stripUndefined(record));
+    });
   }, [items, userProfile, visibleProjects]);
 
   const returnWithdraw = useCallback(async (withdrawId: string) => {
@@ -1239,76 +1464,226 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     );
     const returnedByEmail = userProfile?.email ?? 'unknown@cmg.local';
     const returnedByUid = userProfile?.uid ?? '';
-    const batch = writeBatch(db);
-    const returnedItems = target.items.map((item) => {
-      const sourceRef = doc(db, APP_NAME, 'root', 'stockItems', item.stockItemId);
-      const existingStockItem = items.find((stockItem) => getStockItemId(stockItem) === item.stockItemId);
-      const restoredStatus =
-        item.originalStatus === 'Borrowed' || item.originalStatus === 'Withdrawn'
-          ? 'Received at Site'
-          : item.originalStatus;
+    const withdrawRef = doc(db, APP_NAME, 'root', 'withdrawRecords', target.id);
+    const restorations = target.items.map((item) => {
+      const exactItem = items.find((stockItem) => (
+        getStockItemId(stockItem) === item.stockItemId &&
+        getStockItemProjectNo(stockItem) === normalizeProjectNoText(target.projectNo)
+      ));
+      const materialNo = getStockItemMaterialNo(item.stockItemSnapshot ?? {
+        materialNo: undefined,
+        itemNo: item.itemNo,
+      });
+      const identityItem = exactItem ?? findStockItemByIdentity(items, target.projectNo, materialNo);
+      return {
+        item,
+        stockItemId:
+          (identityItem ? getStockItemId(identityItem) : '') ||
+          createStockIdentityDocumentId(normalizeProjectNoText(target.projectNo), materialNo) ||
+          item.stockItemId,
+      };
+    });
 
-      if (existingStockItem) {
-        batch.set(
-          sourceRef,
+    await runTransaction(db, async (transaction) => {
+      const withdrawSnapshot = await transaction.get(withdrawRef);
+      if (!withdrawSnapshot.exists()) {
+        throw new Error(`Withdraw record ${target.withdrawNo} could not be found.`);
+      }
+      const withdrawData = withdrawSnapshot.data() as DocumentData;
+      const currentStatus = normalizeWithdrawRecordStatus(withdrawData.status);
+      if (normalizeWithdrawType(withdrawData.type) !== 'borrow' || currentStatus === 'Returned' || currentStatus === 'Cancelled') {
+        return;
+      }
+
+      const restorationGroups = restorations.reduce((acc, restoration) => {
+        const grouped = acc.get(restoration.stockItemId) ?? [];
+        grouped.push(restoration.item);
+        acc.set(restoration.stockItemId, grouped);
+        return acc;
+      }, new Map<string, Array<typeof target.items[number]>>());
+      const stockEntries = Array.from(restorationGroups.entries());
+      const stockSnapshots = await Promise.all(
+        stockEntries.map(([stockItemId]) => (
+          transaction.get(doc(db, APP_NAME, 'root', 'stockItems', stockItemId))
+        ))
+      );
+
+      stockEntries.forEach(([stockItemId, groupedItems], index) => {
+        const stockSnapshot = stockSnapshots[index];
+        const existingStockItem = stockSnapshot.exists()
+          ? normalizeStockItem(stockSnapshot.data(), stockSnapshot.id)
+          : undefined;
+        const baseItem = groupedItems[0];
+        const snapshot = baseItem.stockItemSnapshot;
+        if (!existingStockItem && !snapshot) {
+          throw new Error(`Original stock item ${baseItem.receiveNo} could not be restored. Please contact admin.`);
+        }
+
+        const qtyToRestore = groupedItems.reduce((sum, item) => sum + item.qty, 0);
+        const amountToRestore = groupedItems.reduce((sum, item) => sum + item.amount, 0);
+        const restoredStatus =
+          baseItem.originalStatus === 'Borrowed' || baseItem.originalStatus === 'Withdrawn'
+            ? 'Received at Site'
+            : baseItem.originalStatus;
+
+        transaction.set(
+          doc(db, APP_NAME, 'root', 'stockItems', stockItemId),
           stripUndefined({
-            qty: existingStockItem.qty + item.qty,
-            amount: roundAmount(existingStockItem.amount + item.amount),
+            ...(!existingStockItem ? snapshot : {}),
+            stockItemId,
+            receiveNo: existingStockItem?.receiveNo || baseItem.receiveNo,
+            qty: (existingStockItem?.qty ?? 0) + qtyToRestore,
+            amount: roundAmount((existingStockItem?.amount ?? 0) + amountToRestore),
             status:
+              !existingStockItem ||
               existingStockItem.status === 'Borrowed' ||
               existingStockItem.status === 'Withdrawn' ||
               existingStockItem.qty <= 0
                 ? restoredStatus
                 : existingStockItem.status,
+            location: existingStockItem?.location || baseItem.sourceLocation || snapshot?.location,
+            cmgProjectCode: normalizeProjectNoText(target.projectNo),
+            materialNo: snapshot ? getStockItemMaterialNo(snapshot) : existingStockItem?.materialNo,
             lastReturnedWithdrawNo: target.withdrawNo,
             lastReturnedAt: returnedAt,
           }),
           { merge: true }
         );
-      } else if (item.stockItemSnapshot) {
-        batch.set(
-          sourceRef,
-          stripUndefined({
-            ...item.stockItemSnapshot,
-            stockItemId: item.stockItemId,
-            receiveNo: item.receiveNo,
-            qty: item.qty,
-            amount: item.amount,
-            status: restoredStatus,
-            location: item.sourceLocation || item.stockItemSnapshot.location,
-            lastReturnedWithdrawNo: target.withdrawNo,
-            lastReturnedAt: returnedAt,
-          })
-        );
-      } else {
-        throw new Error(`Original stock item ${item.receiveNo} could not be restored. Please contact admin.`);
-      }
+      });
 
+      transaction.set(
+        withdrawRef,
+        stripUndefined({
+          status: 'Returned',
+          returnedAt,
+          returnedByUid,
+          returnedByName,
+          returnedByEmail,
+          items: target.items.map((item) => ({ ...item, returnedQty: item.qty })),
+        }),
+        { merge: true }
+      );
+    });
+  }, [items, userProfile, withdrawList]);
+
+  const cancelWithdraw = useCallback(async (withdrawId: string) => {
+    const target = withdrawList.find((record) => record.id === withdrawId);
+
+    if (!target || target.status === 'Returned' || target.status === 'Cancelled') {
+      return;
+    }
+
+    const cancelledAt = new Date().toISOString();
+    const cancelledByName = formatPersonName(
+      userProfile?.firstName,
+      userProfile?.lastName,
+      userProfile?.email ?? 'Store User'
+    );
+    const cancelledByEmail = userProfile?.email ?? 'unknown@cmg.local';
+    const cancelledByUid = userProfile?.uid ?? '';
+    const withdrawRef = doc(db, APP_NAME, 'root', 'withdrawRecords', target.id);
+    const restorations = target.items.map((item) => {
+      const exactItem = items.find((stockItem) => (
+        getStockItemId(stockItem) === item.stockItemId &&
+        getStockItemProjectNo(stockItem) === normalizeProjectNoText(target.projectNo)
+      ));
+      const materialNo = getStockItemMaterialNo(item.stockItemSnapshot ?? {
+        materialNo: undefined,
+        itemNo: item.itemNo,
+      });
+      const identityItem = exactItem ?? findStockItemByIdentity(items, target.projectNo, materialNo);
       return {
-        ...item,
-        returnedQty: item.qty,
+        item,
+        stockItemId:
+          (identityItem ? getStockItemId(identityItem) : '') ||
+          createStockIdentityDocumentId(normalizeProjectNoText(target.projectNo), materialNo) ||
+          item.stockItemId,
       };
     });
 
-    const withdrawRef = doc(db, APP_NAME, 'root', 'withdrawRecords', target.id);
-    batch.set(
-      withdrawRef,
-      stripUndefined({
-        status: 'Returned',
-        returnedAt,
-        returnedByUid,
-        returnedByName,
-        returnedByEmail,
-        items: returnedItems,
-      }),
-      { merge: true }
-    );
-    await batch.commit();
+    await runTransaction(db, async (transaction) => {
+      const withdrawSnapshot = await transaction.get(withdrawRef);
+      if (!withdrawSnapshot.exists()) {
+        throw new Error(`Withdraw record ${target.withdrawNo} could not be found.`);
+      }
+      const currentStatus = normalizeWithdrawRecordStatus(withdrawSnapshot.data().status);
+      if (currentStatus === 'Returned' || currentStatus === 'Cancelled') {
+        return;
+      }
+
+      const restorationGroups = restorations.reduce((acc, restoration) => {
+        const grouped = acc.get(restoration.stockItemId) ?? [];
+        grouped.push(restoration.item);
+        acc.set(restoration.stockItemId, grouped);
+        return acc;
+      }, new Map<string, Array<typeof target.items[number]>>());
+      const stockEntries = Array.from(restorationGroups.entries());
+      const stockSnapshots = await Promise.all(
+        stockEntries.map(([stockItemId]) => (
+          transaction.get(doc(db, APP_NAME, 'root', 'stockItems', stockItemId))
+        ))
+      );
+
+      stockEntries.forEach(([stockItemId, groupedItems], index) => {
+        const stockSnapshot = stockSnapshots[index];
+        const existingStockItem = stockSnapshot.exists()
+          ? normalizeStockItem(stockSnapshot.data(), stockSnapshot.id)
+          : undefined;
+        const baseItem = groupedItems[0];
+        const snapshot = baseItem.stockItemSnapshot;
+        if (!existingStockItem && !snapshot) {
+          throw new Error(`Original stock item ${baseItem.receiveNo} could not be restored. Please contact admin.`);
+        }
+
+        const qtyToRestore = groupedItems.reduce((sum, item) => sum + item.qty, 0);
+        const amountToRestore = groupedItems.reduce((sum, item) => sum + item.amount, 0);
+        const restoredStatus =
+          baseItem.originalStatus === 'Borrowed' || baseItem.originalStatus === 'Withdrawn'
+            ? 'Received at Site'
+            : baseItem.originalStatus;
+
+        transaction.set(
+          doc(db, APP_NAME, 'root', 'stockItems', stockItemId),
+          stripUndefined({
+            ...(!existingStockItem ? snapshot : {}),
+            stockItemId,
+            receiveNo: existingStockItem?.receiveNo || baseItem.receiveNo,
+            qty: (existingStockItem?.qty ?? 0) + qtyToRestore,
+            amount: roundAmount((existingStockItem?.amount ?? 0) + amountToRestore),
+            status:
+              !existingStockItem ||
+              existingStockItem.status === 'Borrowed' ||
+              existingStockItem.status === 'Withdrawn' ||
+              existingStockItem.qty <= 0
+                ? restoredStatus
+                : existingStockItem.status,
+            location: existingStockItem?.location || baseItem.sourceLocation || snapshot?.location,
+            cmgProjectCode: normalizeProjectNoText(target.projectNo),
+            materialNo: snapshot ? getStockItemMaterialNo(snapshot) : existingStockItem?.materialNo,
+            lastCancelledWithdrawNo: target.withdrawNo,
+            lastCancelledAt: cancelledAt,
+          }),
+          { merge: true }
+        );
+      });
+
+      transaction.set(
+        withdrawRef,
+        {
+          status: 'Cancelled',
+          cancelledAt,
+          cancelledByUid,
+          cancelledByName,
+          cancelledByEmail,
+        },
+        { merge: true }
+      );
+    });
   }, [items, userProfile, withdrawList]);
 
   const receiveDispatch = useCallback(async (dispatchId: string, receivedItems?: ReceiveDispatchLineInput[]) => {
     const target = dispatchList.find((record) => record.id === dispatchId);
-    if (!target || target.status === 'Received at Site') {
+    if (!target || target.status === 'Received at Site' || target.status === 'Dispatch Cancelled') {
       return;
     }
 
@@ -1324,68 +1699,151 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     const receivedByEmail = userProfile?.email ?? 'unknown@cmg.local';
     const receivedByUid = userProfile?.uid ?? '';
 
-    const batch = writeBatch(db);
-    let totalReceivedQty = 0;
-    const receivedSnapshots = target.items.map((item) => {
-      const sourceStockItem = items.find((stockItem) => getStockItemId(stockItem) === item.stockReceiveNo);
-      const requestedQty = item.qty;
-      const receivedQty = Math.min(
-        requestedQty,
-        receivedQtyByItem.get(item.stockReceiveNo) ?? requestedQty
+    const dispatchRef = doc(db, APP_NAME, 'root', 'dispatchRecords', dispatchId);
+    const destinationProjectNo = normalizeProjectNoText(target.destinationProjectNo);
+    const transitIds = target.items.map((item) => item.stockReceiveNo);
+    const plans = target.items.map((item) => {
+      const transitStockItem = items.find((stockItem) => getStockItemId(stockItem) === item.stockReceiveNo);
+      const materialNo = normalizeMaterialNo(item.materialNo || transitStockItem?.materialNo || item.itemNo);
+      const existingDestinationItem = findStockItemByIdentity(
+        items,
+        destinationProjectNo,
+        materialNo,
+        transitIds,
       );
-      const docRef = doc(db, APP_NAME, 'root', 'stockItems', item.stockReceiveNo);
+      const destinationStockItemId = existingDestinationItem
+        ? getStockItemId(existingDestinationItem)
+        : createStockIdentityDocumentId(destinationProjectNo, materialNo) || item.stockReceiveNo;
 
-      if (receivedQty <= 0) {
-        batch.delete(docRef);
-        return {
-          ...item,
-          receivedQty: 0,
-        };
-      }
-
-      totalReceivedQty += receivedQty;
-      batch.set(
-        docRef,
-        stripUndefined({
-          qty: receivedQty,
-          amount: sourceStockItem
-            ? calculatePartialAmount(sourceStockItem.amount, sourceStockItem.qty, receivedQty)
-            : undefined,
-          status: 'Received at Site',
-          location: createProjectStoreLocation(target.destinationProjectNo),
-          purchasedForProject: createProjectLabel(target.destinationProjectNo),
-          receiveName: receivedByName,
-          receivedByUid,
-          receivedByName,
-          receivedByEmail,
-          lastReceivedAt: receivedAt,
-        }),
-        { merge: true }
-      );
-
-      return {
-        ...item,
-        receivedQty,
-      };
+      return { item, materialNo, destinationStockItemId };
     });
 
-    const dispatchRef = doc(db, APP_NAME, 'root', 'dispatchRecords', dispatchId);
-    batch.set(
-      dispatchRef,
-      {
-        status: 'Received at Site',
-        receivedAt,
-        receivedByName,
-        receivedByEmail,
-        items: receivedSnapshots,
-        totalReceivedQty,
-      },
-      { merge: true }
-    );
-    await batch.commit();
+    await runTransaction(db, async (transaction) => {
+      const dispatchSnapshot = await transaction.get(dispatchRef);
+      if (!dispatchSnapshot.exists()) {
+        throw new Error(`Dispatch ${dispatchId} could not be found.`);
+      }
+      if (normalizeText(dispatchSnapshot.data().status) !== 'Pending Receipt') {
+        return;
+      }
+
+      const uniqueTransitIds = Array.from(new Set(plans.map((plan) => plan.item.stockReceiveNo)));
+      const uniqueDestinationIds = Array.from(new Set(plans.map((plan) => plan.destinationStockItemId)));
+      const allStockIds = Array.from(new Set([...uniqueTransitIds, ...uniqueDestinationIds]));
+      const allStockSnapshots = await Promise.all(
+        allStockIds.map((stockItemId) => (
+          transaction.get(doc(db, APP_NAME, 'root', 'stockItems', stockItemId))
+        ))
+      );
+      const stockSnapshotById = new Map(
+        allStockIds.map((stockItemId, index) => [stockItemId, allStockSnapshots[index]])
+      );
+      const destinationGroups = new Map<string, Array<{
+        plan: typeof plans[number];
+        transitStockItem: StockItem;
+        receivedQty: number;
+        receivedAmount: number;
+      }>>();
+      let totalReceivedQty = 0;
+
+      const receivedSnapshots = plans.map((plan) => {
+        const transitSnapshot = stockSnapshotById.get(plan.item.stockReceiveNo);
+        if (!transitSnapshot?.exists()) {
+          throw new Error(`In-transit stock item ${plan.item.stockReceiveNo} could not be found.`);
+        }
+
+        const transitStockItem = normalizeStockItem(transitSnapshot.data(), transitSnapshot.id);
+        const requestedQty = plan.item.qty;
+        const receivedQty = Math.min(
+          requestedQty,
+          receivedQtyByItem.get(plan.item.stockReceiveNo) ?? requestedQty
+        );
+        const receivedAmount = calculatePartialAmount(
+          transitStockItem.amount,
+          transitStockItem.qty,
+          receivedQty,
+        );
+
+        totalReceivedQty += receivedQty;
+        if (receivedQty > 0) {
+          const grouped = destinationGroups.get(plan.destinationStockItemId) ?? [];
+          grouped.push({ plan, transitStockItem, receivedQty, receivedAmount });
+          destinationGroups.set(plan.destinationStockItemId, grouped);
+        }
+
+        return {
+          ...plan.item,
+          materialNo: plan.materialNo,
+          destinationStockItemId: receivedQty > 0 ? plan.destinationStockItemId : undefined,
+          receivedQty,
+        };
+      });
+
+      destinationGroups.forEach((groupedPlans, destinationStockItemId) => {
+        const destinationSnapshot = stockSnapshotById.get(destinationStockItemId);
+        const destinationIsTransitItem = groupedPlans.some(
+          ({ plan }) => plan.item.stockReceiveNo === destinationStockItemId
+        );
+        const existingDestinationItem = destinationSnapshot?.exists() && !destinationIsTransitItem
+          ? normalizeStockItem(destinationSnapshot.data(), destinationSnapshot.id)
+          : undefined;
+        const base = groupedPlans[0];
+        const qtyToAdd = groupedPlans.reduce((sum, entry) => sum + entry.receivedQty, 0);
+        const amountToAdd = groupedPlans.reduce((sum, entry) => sum + entry.receivedAmount, 0);
+        const destinationRef = doc(db, APP_NAME, 'root', 'stockItems', destinationStockItemId);
+
+        transaction.set(
+          destinationRef,
+          stripUndefined({
+            ...(!existingDestinationItem ? base.transitStockItem : {}),
+            stockItemId: destinationStockItemId,
+            receiveNo:
+              existingDestinationItem?.receiveNo ||
+              base.plan.item.receiveNo ||
+              base.transitStockItem.sourceReceiveNo ||
+              destinationStockItemId,
+            qty: (existingDestinationItem?.qty ?? 0) + qtyToAdd,
+            amount: roundAmount((existingDestinationItem?.amount ?? 0) + amountToAdd),
+            materialNo: base.plan.materialNo,
+            status: 'Received at Site',
+            location: createProjectStoreLocation(target.destinationProjectNo),
+            purchasedForProject: createProjectLabel(target.destinationProjectNo),
+            projectId: target.destinationProjectNo,
+            cmgProjectCode: destinationProjectNo,
+            receiveName: receivedByName,
+            receivedByUid,
+            receivedByName,
+            receivedByEmail,
+            lastReceivedAt: receivedAt,
+            lastDispatchNo: target.dispatchNo,
+          }),
+          { merge: true }
+        );
+      });
+
+      uniqueTransitIds.forEach((transitId) => {
+        const isDestination = destinationGroups.has(transitId);
+        if (!isDestination) {
+          transaction.delete(doc(db, APP_NAME, 'root', 'stockItems', transitId));
+        }
+      });
+
+      transaction.set(
+        dispatchRef,
+        {
+          status: 'Received at Site',
+          receivedAt,
+          receivedByName,
+          receivedByEmail,
+          items: receivedSnapshots,
+          totalReceivedQty,
+        },
+        { merge: true }
+      );
+    });
   }, [dispatchList, items, userProfile]);
 
-  const approveReceivingRequest = useCallback(async (requestId: string) => {
+  const approveReceivingRequest = useCallback(async (requestId: string, receivedItems?: ApproveReceivingRequestLineInput[]) => {
     const target = receivingRequestList.find(
       (request) => request.id === requestId && request.requestStatus === 'pending'
     );
@@ -1394,13 +1852,51 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       return;
     }
 
-    const projectNo = target.projectNo || extractProjectNo(target.projectName);
+    const requestedItemByIndex = new Map(
+      (receivedItems ?? []).map((item) => [item.itemIndex, item])
+    );
+    const receivingItems = target.items.map((item, index) => {
+      const requestedItem = requestedItemByIndex.get(index);
+      const requestedQty = requestedItem?.receivedQty;
+      const receivedQty = requestedQty === undefined ? item.receivedQty : requestedQty;
+      const itemType = requestedItem?.itemType?.trim() || item.itemType;
+      const itemTypeGroup = requestedItem?.itemTypeGroup || item.itemTypeGroup;
+
+      if (!Number.isInteger(receivedQty) || receivedQty < 0 || receivedQty > item.receivedQty) {
+        throw new Error(`Received quantity for ${item.itemDescription || item.itemNo} must be between 0 and ${item.receivedQty}.`);
+      }
+
+      return {
+        item,
+        index,
+        receivedQty,
+        amount: calculatePartialAmount(item.amount, item.receivedQty, receivedQty),
+        itemType,
+        itemTypeGroup,
+      };
+    });
+
+    if (!receivingItems.some((entry) => entry.receivedQty > 0)) {
+      throw new Error('Please enter a received quantity greater than 0 for at least one item.');
+    }
+
+    const projectNo = normalizeProjectNoText(
+      target.cmgProjectCode ||
+      target.projectItemCode ||
+      target.projectNo ||
+      target.projectId ||
+      extractProjectNo(target.projectName)
+    );
     const cmgProjectCode = normalizeCmgProjectCode(
       target.cmgProjectCode,
       target.projectItemCode,
       target.projectNo,
       target.projectId,
     );
+    if (!projectNo || !cmgProjectCode) {
+      throw new Error(`Receiving request ${target.id} does not have a valid project number.`);
+    }
+
     const location = target.location || (projectNo ? createProjectStoreLocation(projectNo) : 'Store Center');
     const stockStatus: StockItem['status'] = location === 'Store Center' ? 'Pending Dispatch' : 'Received at Site';
     const approvedAt = new Date().toISOString();
@@ -1411,54 +1907,140 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     );
     const approvedByEmail = userProfile?.email ?? 'unknown@cmg.local';
     const approvedByUid = userProfile?.uid ?? '';
-    const stockReceiveNos = target.items.map((item, index) => createReceivingStockReceiveNo(target, item, index));
-
-    const batch = writeBatch(db);
-    target.items.forEach((item, index) => {
-      const stockReceiveNo = stockReceiveNos[index];
-      const stockRef = doc(db, APP_NAME, 'root', 'stockItems', stockReceiveNo);
-      const stockItem: StockItem = {
-        stockItemId: stockReceiveNo,
-        receiveNo: stockReceiveNo,
-        poNo: target.poNo,
-        prNo: target.prNo,
-        poType: target.poType,
-        itemNo: item.itemNo,
-        itemDescription: item.itemDescription,
-        amount: item.amount,
-        qty: item.receivedQty,
-        vendorName: target.vendorName,
-        location,
-        purchasedForProject: projectNo ? createProjectLabel(projectNo) : target.projectName,
-        cmgProjectCode,
-        receiveName: target.receiveName || approvedByName,
-        receiveDate: target.receiveDate,
-        receivedByUid: approvedByUid,
-        receivedByName: approvedByName,
-        receivedByEmail: approvedByEmail,
-        lastReceivedAt: approvedAt,
-        status: stockStatus,
-      };
-
-      batch.set(stockRef, stockItem);
-    });
-
     const requestRef = doc(db, APP_NAME, 'root', 'receivingRequests', target.id);
-    batch.set(
-      requestRef,
-      {
-        requestStatus: 'approved',
-        approvedAt,
-        approvedByUid,
-        approvedByName,
-        approvedByEmail,
-        stockReceiveNos,
-      },
-      { merge: true }
-    );
+    const assignments = receivingItems
+      .filter((entry) => entry.receivedQty > 0)
+      .map(({ item: sourceItem, index, receivedQty, amount, itemType, itemTypeGroup }) => {
+      const item = {
+        ...sourceItem,
+        receivedQty,
+        amount,
+        itemType,
+        itemTypeGroup,
+      };
+      const materialNo = normalizeMaterialNo(item.materialNo || item.itemNo);
+      const existingStockItem = findStockItemByIdentity(items, cmgProjectCode, materialNo);
+      const deterministicId = createStockIdentityDocumentId(cmgProjectCode, materialNo);
+      const stockItemId = existingStockItem
+        ? getStockItemId(existingStockItem)
+        : deterministicId || createReceivingStockReceiveNo(target, item, index);
 
-    await batch.commit();
-  }, [receivingRequestList, userProfile]);
+        return { item, index, materialNo, stockItemId };
+      });
+    const assignmentsByStockId = assignments.reduce((acc, assignment) => {
+      const grouped = acc.get(assignment.stockItemId) ?? [];
+      grouped.push(assignment);
+      acc.set(assignment.stockItemId, grouped);
+      return acc;
+    }, new Map<string, typeof assignments>());
+
+    await runTransaction(db, async (transaction) => {
+      const requestSnapshot = await transaction.get(requestRef);
+      if (!requestSnapshot.exists()) {
+        throw new Error(`Receiving request ${target.id} could not be found.`);
+      }
+
+      const requestData = requestSnapshot.data() as DocumentData;
+      if (normalizeReceivingRequestStatus(requestData.requestStatus ?? requestData.status) !== 'pending') {
+        return;
+      }
+
+      const stockEntries = Array.from(assignmentsByStockId.entries());
+      const stockSnapshots = await Promise.all(
+        stockEntries.map(([stockItemId]) => (
+          transaction.get(doc(db, APP_NAME, 'root', 'stockItems', stockItemId))
+        ))
+      );
+
+      stockEntries.forEach(([stockItemId, groupedAssignments], stockIndex) => {
+        const stockSnapshot = stockSnapshots[stockIndex];
+        const existingStockItem = stockSnapshot.exists()
+          ? normalizeStockItem(stockSnapshot.data(), stockSnapshot.id)
+          : undefined;
+        const firstItem = groupedAssignments[0].item;
+        const qtyToAdd = groupedAssignments.reduce((sum, assignment) => sum + assignment.item.receivedQty, 0);
+        const amountToAdd = groupedAssignments.reduce((sum, assignment) => sum + assignment.item.amount, 0);
+        const stockRef = doc(db, APP_NAME, 'root', 'stockItems', stockItemId);
+
+        transaction.set(
+          stockRef,
+          stripUndefined({
+            stockItemId,
+            receiveNo: existingStockItem?.receiveNo || target.receiveNo || stockItemId,
+            sourceReceiveNo: target.receiveNo,
+            poNo: target.poNo,
+            prNo: target.prNo,
+            poType: target.poType,
+            itemNo: firstItem.itemNo || groupedAssignments[0].materialNo,
+            itemDescription: firstItem.itemDescription,
+            materialNo: groupedAssignments[0].materialNo,
+            unit: firstItem.unit,
+            itemType: firstItem.itemType,
+            itemTypeGroup: firstItem.itemTypeGroup,
+            orderedQty: firstItem.orderedQty,
+            unitPrice: firstItem.price,
+            amount: roundAmount((existingStockItem?.amount ?? 0) + amountToAdd),
+            qty: (existingStockItem?.qty ?? 0) + qtyToAdd,
+            vendorName: target.vendorName,
+            location,
+            purchasedForProject: createProjectLabel(projectNo),
+            projectId: target.projectId || projectNo,
+            cmgProjectCode,
+            receiveName: target.receiveName || approvedByName,
+            receiveDate: target.receiveDate,
+            receivedByUid: approvedByUid,
+            receivedByName: approvedByName,
+            receivedByEmail: approvedByEmail,
+            lastReceiveEventId: target.id,
+            lastReceivedQty: qtyToAdd,
+            lastReceivedAt: approvedAt,
+            status: stockStatus,
+          }),
+          { merge: true }
+        );
+      });
+
+      const rawItems = parseReceivingItems(requestData.items);
+      let activeItemIndex = 0;
+      const updatedItems = rawItems.map((rawItem, rawItemIndex) => {
+        const rawItemData = rawItem && typeof rawItem === 'object'
+          ? rawItem as DocumentData
+          : ({} as DocumentData);
+        const normalizedRawItem = normalizeReceivingRequestItem(rawItemData, rawItemIndex);
+        if (normalizedRawItem.receivedQty <= 0) {
+          return rawItemData;
+        }
+
+        const receivingItem = receivingItems[activeItemIndex];
+        activeItemIndex += 1;
+        const assignment = assignments.find((entry) => entry.index === receivingItem?.index);
+        return {
+          ...rawItemData,
+          receivedQty: receivingItem?.receivedQty ?? 0,
+          amount: receivingItem?.amount ?? 0,
+          itemType: receivingItem?.itemType,
+          itemTypeGroup: receivingItem?.itemTypeGroup,
+          stockReceiveNo: assignment?.stockItemId,
+        };
+      });
+
+      transaction.set(
+        requestRef,
+        stripUndefined({
+          requestStatus: 'approved',
+          approvedAt,
+          approvedByUid,
+          approvedByName,
+          approvedByEmail,
+          items: updatedItems,
+          stockReceiveNos: assignments.map((assignment) => assignment.stockItemId),
+          totalQty: receivingItems.reduce<number>((sum, entry) => sum + entry.receivedQty, 0),
+          totalAmount: roundAmount(receivingItems.reduce<number>((sum, entry) => sum + entry.amount, 0)),
+        }),
+        { merge: true }
+      );
+    });
+  }, [items, receivingRequestList, userProfile]);
 
   const approveReceipt = useCallback(async (receiveNo: string) => {
     const pendingDispatch = dispatchList.find(
@@ -1534,14 +2116,16 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     () => ({
       projects: visibleProjects,
       activeProjects: activeVisibleProjects,
-      stockItems: items,
-      receivingRequests: receivingRequestList,
+      stockItems: visibleStockItems,
+      receivingRequests: visibleReceivingRequests,
       dispatchRecords: visibleDispatchRecords,
       withdrawRecords: visibleWithdrawRecords,
       updateProjectStatus,
       createDispatch,
+      cancelDispatch,
       createWithdraw,
       returnWithdraw,
+      cancelWithdraw,
       approveReceipt,
       approveReceivingRequest,
       receiveDispatch,
@@ -1555,9 +2139,9 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       approveReceivingRequest,
       approveReceipt,
       createDispatch,
+      cancelDispatch,
       createWithdraw,
-      items,
-      receivingRequestList,
+      cancelWithdraw,
       receiveDispatch,
       receiveNewItem,
       receivePrPoPayload,
@@ -1565,6 +2149,8 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       updateProjectStatus,
       activeVisibleProjects,
       visibleDispatchRecords,
+      visibleReceivingRequests,
+      visibleStockItems,
       visibleWithdrawRecords,
       visibleProjects,
     ]

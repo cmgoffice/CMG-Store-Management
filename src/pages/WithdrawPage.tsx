@@ -15,6 +15,7 @@ import { SearchField } from '../components/SearchField';
 import { StatusBadge } from '../components/StatusBadge';
 import { useInventory } from '../context/InventoryContext';
 import { useRole } from '../context/RoleContext';
+import { useDialog } from '../context/DialogContext';
 import type { StockItem, WithdrawRecord, WithdrawRecordStatus, WithdrawType } from '../types/models';
 import { getStockItemId } from '../utils/stockItem';
 import '../styles/tables.css';
@@ -106,7 +107,7 @@ function getStockItemProjectNo(item: StockItem) {
 }
 
 function isWithdrawOverdue(record: WithdrawRecord) {
-  if (record.type !== 'borrow' || record.status === 'Returned' || !record.dueDate) {
+  if (record.type !== 'borrow' || record.status === 'Returned' || record.status === 'Cancelled' || !record.dueDate) {
     return false;
   }
 
@@ -127,6 +128,7 @@ function getWithdrawTypeLabel(type: WithdrawType) {
 }
 
 export function WithdrawPage() {
+  const { showAlert, showConfirm } = useDialog();
   const {
     projects,
     activeProjects,
@@ -134,9 +136,10 @@ export function WithdrawPage() {
     withdrawRecords,
     createWithdraw,
     returnWithdraw,
+    cancelWithdraw,
     activeProjectNo,
   } = useInventory();
-  const { activeRole, isReadOnly } = useRole();
+  const { roleLabel, isReadOnly } = useRole();
   const [activeTab, setActiveTab] = useState<WithdrawTab>('records');
   const [query, setQuery] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -155,6 +158,7 @@ export function WithdrawPage() {
   const [itemPickerQuery, setItemPickerQuery] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [returningWithdrawId, setReturningWithdrawId] = useState<string | null>(null);
+  const [cancellingWithdrawId, setCancellingWithdrawId] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState('');
   const [submitError, setSubmitError] = useState('');
   const normalizedQuery = query.trim().toLowerCase();
@@ -245,7 +249,7 @@ export function WithdrawPage() {
   }, [normalizedActiveProjectNo, normalizedQuery, withdrawRecords]);
 
   const waitingReturnRecords = useMemo(
-    () => projectWithdrawRecords.filter((record) => record.type === 'borrow' && record.status !== 'Returned'),
+    () => projectWithdrawRecords.filter((record) => record.type === 'borrow' && record.status !== 'Returned' && record.status !== 'Cancelled'),
     [projectWithdrawRecords]
   );
 
@@ -274,7 +278,7 @@ export function WithdrawPage() {
   });
 
   const withdrawUnavailableReason = !canCreateWithdraw
-    ? `Withdraw creation is not available for ${activeRole}.`
+    ? `Withdraw creation is not available for ${roleLabel}.`
     : !activeProjectNo
       ? 'Please select an active project first.'
       : availableItems.length === 0
@@ -454,9 +458,32 @@ export function WithdrawPage() {
       await returnWithdraw(record.id);
     } catch (error) {
       console.error('Failed to return withdraw:', error);
-      window.alert(error instanceof Error ? error.message : 'Failed to return borrowed items.');
+      await showAlert(error instanceof Error ? error.message : 'Failed to return borrowed items.', { variant: 'error' });
     } finally {
       setReturningWithdrawId(null);
+    }
+  };
+
+  const handleCancelWithdraw = async (record: WithdrawRecord) => {
+    if (cancellingWithdrawId || isReadOnly || record.status === 'Returned' || record.status === 'Cancelled') {
+      return;
+    }
+
+    const confirmed = await showConfirm(
+      `ยืนยันการยกเลิกการเบิก ${record.withdrawNo}? จำนวนสินค้าจะถูกคืนกลับไปยัง Store ของโครงการที่ตัดยอดรายการนี้`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setCancellingWithdrawId(record.id);
+    try {
+      await cancelWithdraw(record.id);
+    } catch (error) {
+      console.error('Failed to cancel withdraw:', error);
+      await showAlert(error instanceof Error ? error.message : 'Failed to cancel the withdrawal. Please try again.', { variant: 'error' });
+    } finally {
+      setCancellingWithdrawId(null);
     }
   };
 
@@ -464,7 +491,7 @@ export function WithdrawPage() {
     <div>
       <PageHeader
         eyebrow="Stock"
-        title="Withdraw"
+        title="เบิกสินค้า"
         description={
           activeProject
             ? `Create and track stock withdrawals for Project ${activeProject.projectNo}. Borrowed items stay visible until returned.`
@@ -475,17 +502,17 @@ export function WithdrawPage() {
             <SearchField
               value={query}
               onChange={setQuery}
-              placeholder="Search withdraw no, requester, item"
+              placeholder="ค้นหาเลขที่เบิก ผู้ขอเบิก หรือรายการสินค้า"
             />
             <button
               className={styles.primaryButton}
               type="button"
               disabled={!canCreateWithdraw || !activeProjectNo}
               onClick={handleOpenModal}
-              title={withdrawUnavailableReason || 'Create withdraw request'}
+              title={withdrawUnavailableReason || 'สร้างรายการเบิก'}
             >
               <PackageMinus size={16} />
-              <span>Create Withdraw</span>
+              <span>สร้างรายการเบิก</span>
             </button>
           </>
         }
@@ -503,7 +530,7 @@ export function WithdrawPage() {
 
       {!canCreateWithdraw ? (
         <div className={styles.notice}>
-          Withdraw creation and item return are read-only for {activeRole}. You can still review records for the active project.
+          Withdraw creation and item return are read-only for {roleLabel}. You can still review records for the active project.
         </div>
       ) : null}
 
@@ -513,7 +540,7 @@ export function WithdrawPage() {
             <PackageMinus size={20} />
           </div>
           <div>
-            <div className={styles.summaryLabel}>Available Store Qty</div>
+            <div className={styles.summaryLabel}>จำนวนคงเหลือในคลัง</div>
             <div className={styles.summaryValue}>{totalAvailableQty.toLocaleString()}</div>
           </div>
         </div>
@@ -522,7 +549,7 @@ export function WithdrawPage() {
             <CalendarClock size={20} />
           </div>
           <div>
-            <div className={styles.summaryLabel}>Waiting Return</div>
+            <div className={styles.summaryLabel}>รอคืน</div>
             <div className={styles.summaryValue}>{waitingReturnRecords.length.toLocaleString()}</div>
           </div>
         </div>
@@ -531,7 +558,7 @@ export function WithdrawPage() {
             <AlertTriangle size={20} />
           </div>
           <div>
-            <div className={styles.summaryLabel}>Overdue</div>
+            <div className={styles.summaryLabel}>เกินกำหนด</div>
             <div className={styles.summaryValue}>{overdueRecords.length.toLocaleString()}</div>
           </div>
         </div>
@@ -558,29 +585,37 @@ export function WithdrawPage() {
         <section className={styles.panel}>
           <div className={styles.sectionHeader}>
             <div>
-              <h2>Withdraw Records</h2>
-              <p>Issued withdrawals deduct stock permanently, while borrowed withdrawals wait for return.</p>
+              <h2>รายการเบิกสินค้า</h2>
+              <p>การเบิกจ่ายจะตัดสต็อกถาวร ส่วนการยืมจะรอคืนเข้าคลัง</p>
             </div>
             <div className={styles.selectionNote}>Active: {activeProject?.projectNo ?? '-'}</div>
           </div>
 
           <div className="tableScroll">
-            <table className="table">
+            <table className={`table compact ${styles.withdrawTable}`}>
               <thead>
                 <tr>
-                  <th>Withdraw No.</th>
-                  <th>Type</th>
-                  <th>Requester</th>
-                  <th>Date / Due</th>
-                  <th>Items</th>
-                  <th>Purpose / Photos</th>
-                  <th>Issued By</th>
-                  <th>Status</th>
+                  <th>การดำเนินการ</th>
+                  <th>เลขที่เบิก</th><th>ประเภท</th><th>ผู้ขอเบิก</th><th>วันที่ / กำหนดคืน</th><th>รายการ</th><th className="numeric">QTY</th><th>วัตถุประสงค์ / รูปภาพ</th><th>ผู้จ่าย</th><th>สถานะ</th>
                 </tr>
               </thead>
               <tbody>
                 {projectWithdrawRecords.map((record) => (
                   <tr key={record.id}>
+                    <td>
+                      {record.status !== 'Returned' && record.status !== 'Cancelled' ? (
+                        <button
+                          type="button"
+                          className={styles.cancelButton}
+                          disabled={isReadOnly || cancellingWithdrawId === record.id}
+                          onClick={() => handleCancelWithdraw(record)}
+                          title={isReadOnly ? `บทบาท ${roleLabel} ไม่สามารถยกเลิกการเบิกได้` : 'ยกเลิกการเบิกและคืนสินค้าเข้าคลังโครงการ'}
+                        >
+                          {cancellingWithdrawId === record.id ? <span className={styles.spinner} /> : <X size={13} />}
+                          <span>{cancellingWithdrawId === record.id ? 'กำลังยกเลิก...' : 'ยกเลิก'}</span>
+                        </button>
+                      ) : null}
+                    </td>
                     <td>
                       <span className={styles.withdrawCode}>{record.withdrawNo}</span>
                       <small className={styles.subText}>Doc: {record.projectShortNo}</small>
@@ -606,8 +641,15 @@ export function WithdrawPage() {
                       <div className={styles.itemStack}>
                         {record.items.map((item) => (
                           <span key={`${record.id}-${item.stockItemId}`} className={styles.itemChip}>
-                            {item.receiveNo} / {item.itemDescription} / Qty {item.qty}
+                            {item.itemDescription}
                           </span>
+                        ))}
+                      </div>
+                    </td>
+                    <td className={`numeric ${styles.withdrawQtyCell}`}>
+                      <div className={styles.qtyStack}>
+                        {record.items.map((item) => (
+                          <span key={`${record.id}-qty-${item.stockItemId}`}>{item.qty.toLocaleString()}</span>
                         ))}
                       </div>
                     </td>
@@ -629,7 +671,7 @@ export function WithdrawPage() {
                             ))}
                           </div>
                         ) : (
-                          <span className={styles.subText}>No photo</span>
+                          <span className={styles.subText}>ไม่มีรูปภาพ</span>
                         )}
                       </div>
                     </td>
@@ -646,7 +688,7 @@ export function WithdrawPage() {
                 ))}
                 {projectWithdrawRecords.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className={styles.empty}>
+                    <td colSpan={10} className={styles.empty}>
                       No withdraw records matched the current active project and filters.
                     </td>
                   </tr>
@@ -659,8 +701,8 @@ export function WithdrawPage() {
         <section className={styles.panel}>
           <div className={styles.sectionHeader}>
             <div>
-              <h2>Waiting Return / Due</h2>
-              <p>Borrowed tools and equipment remain here until returned into the active project store.</p>
+              <h2>รอคืน / กำหนดคืน</h2>
+              <p>เครื่องมือและอุปกรณ์ที่ยืมจะแสดงที่นี่จนกว่าจะคืนเข้าคลังโครงการปัจจุบัน</p>
             </div>
             <div className={styles.selectionNote}>Active: {activeProject?.projectNo ?? '-'}</div>
           </div>
@@ -669,14 +711,7 @@ export function WithdrawPage() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>Withdraw No.</th>
-                  <th>Requester</th>
-                  <th>Due Date</th>
-                  <th>Items to Return</th>
-                  <th>Purpose</th>
-                  <th>Issued By</th>
-                  <th>Status</th>
-                  <th>Action</th>
+                  <th>เลขที่เบิก</th><th>ผู้ขอเบิก</th><th>กำหนดคืน</th><th>รายการที่ต้องคืน</th><th>วัตถุประสงค์</th><th>ผู้จ่าย</th><th>สถานะ</th><th>การดำเนินการ</th>
                 </tr>
               </thead>
               <tbody>
@@ -715,7 +750,7 @@ export function WithdrawPage() {
                           className={styles.secondaryButton}
                           disabled={isReadOnly || returningWithdrawId === record.id}
                           onClick={() => handleReturnWithdraw(record)}
-                          title={isReadOnly ? `Return action is not available for ${activeRole}.` : 'Return borrowed items to stock'}
+                          title={isReadOnly ? `บทบาท ${roleLabel} ไม่สามารถคืนสินค้าได้` : 'คืนสินค้าที่ยืมเข้าสต็อก'}
                         >
                           {returningWithdrawId === record.id ? (
                             <span className={styles.spinner} />
@@ -746,8 +781,8 @@ export function WithdrawPage() {
           <div className={styles.modal}>
             <div className={styles.modalHeader}>
               <div>
-                <h3>Create Withdraw Record</h3>
-                <p>Select available Store items from the active project and choose whether they are consumed or borrowed.</p>
+                <h3>สร้างรายการเบิกสินค้า</h3>
+                <p>เลือกรายการที่คงเหลือในคลังของโครงการปัจจุบัน และระบุว่าเบิกจ่ายหรือยืม</p>
               </div>
               <button type="button" className={styles.iconButton} onClick={closeModal} aria-label="Close modal">
                 <X size={18} />
@@ -756,7 +791,7 @@ export function WithdrawPage() {
 
             <div className={styles.modalBody}>
               <div className={styles.modalInfo}>
-                <span>Active Project</span>
+                <span>โครงการปัจจุบัน</span>
                 <strong>{activeProject ? `Project ${activeProject.projectNo} - ${activeProject.projectName}` : '-'}</strong>
               </div>
 
@@ -770,7 +805,7 @@ export function WithdrawPage() {
                   }}
                 >
                   <PackageMinus size={16} />
-                  <span>Issue and Deduct</span>
+                  <span>เบิกจ่ายและตัดสต็อก</span>
                 </button>
                 <button
                   type="button"
@@ -778,35 +813,35 @@ export function WithdrawPage() {
                   onClick={() => setWithdrawType('borrow')}
                 >
                   <RotateCcw size={16} />
-                  <span>Borrow and Return</span>
+                  <span>ยืมและคืน</span>
                 </button>
               </div>
 
               <div className={styles.formGrid}>
                 <label className={styles.field}>
-                  <span>Requester / Responsible Person</span>
+                  <span>ผู้ขอเบิก / ผู้รับผิดชอบ</span>
                   <input
                     className={styles.input}
                     type="text"
                     value={requesterName}
                     onChange={(event) => setRequesterName(event.target.value)}
-                    placeholder="Requester name"
+                    placeholder="ชื่อผู้ขอเบิก"
                   />
                 </label>
 
                 <label className={styles.field}>
-                  <span>Requester Phone</span>
+                  <span>โทรศัพท์ผู้ขอเบิก</span>
                   <input
                     className={styles.input}
                     type="tel"
                     value={requesterPhone}
                     onChange={(event) => setRequesterPhone(event.target.value)}
-                    placeholder="Phone number"
+                    placeholder="หมายเลขโทรศัพท์"
                   />
                 </label>
 
                 <label className={styles.field}>
-                  <span>Withdraw Date</span>
+                  <span>วันที่เบิก</span>
                   <input
                     className={styles.input}
                     type="date"
@@ -816,7 +851,7 @@ export function WithdrawPage() {
                 </label>
 
                 <label className={styles.field}>
-                  <span>Return Due Date</span>
+                  <span>กำหนดคืน</span>
                   <input
                     className={styles.input}
                     type="date"
@@ -829,14 +864,14 @@ export function WithdrawPage() {
 
               <div className={styles.field}>
                 <div className={styles.fieldHeader}>
-                  <span>Items and Quantity</span>
+                  <span>รายการและจำนวน</span>
                   <button
                     className={styles.selectItemsButton}
                     type="button"
                     onClick={() => setIsItemPickerOpen(true)}
                   >
                     <ListPlus size={16} />
-                    <span>Select</span>
+                    <span>เลือก</span>
                   </button>
                 </div>
 
@@ -847,11 +882,7 @@ export function WithdrawPage() {
                 ) : (
                   <div className={styles.selectedItemsTable}>
                     <div className={styles.selectedItemsHead}>
-                      <span>Receive No.</span>
-                      <span>Item</span>
-                      <span>Available</span>
-                      <span>Withdraw Qty</span>
-                      <span>Action</span>
+                      <span>เลขที่รับ</span><span>รายการ</span><span>คงเหลือ</span><span>จำนวนเบิก</span><span>การดำเนินการ</span>
                     </div>
                     <div className={styles.selectedItemsBody}>
                       {selectedItems.map((item) => {
@@ -878,7 +909,7 @@ export function WithdrawPage() {
                               type="button"
                               onClick={() => removeSelectedItem(stockItemId)}
                               aria-label={`Remove ${item.receiveNo}`}
-                              title="Remove item"
+                              title="ลบรายการ"
                             >
                               <Trash2 size={15} />
                             </button>
@@ -891,24 +922,24 @@ export function WithdrawPage() {
               </div>
 
               <label className={styles.field}>
-                <span>Purpose / Usage Detail</span>
+                <span>วัตถุประสงค์ / รายละเอียดการใช้งาน</span>
                 <textarea
                   className={styles.textarea}
                   value={purpose}
                   onChange={(event) => setPurpose(event.target.value)}
-                  placeholder="Describe where and why these items are withdrawn"
+                  placeholder="ระบุสถานที่และเหตุผลในการเบิกสินค้า"
                   rows={4}
                 />
               </label>
 
               <div className={styles.field}>
-                <span>Photos</span>
+                <span>รูปภาพ</span>
                 <label className={styles.uploadBox}>
                   <input type="file" accept="image/*" multiple onChange={handleFileChange} />
                   <ImagePlus size={18} />
                   <div>
-                    <strong>Upload to Firebase Storage</strong>
-                    <p>Attach up to 5 photos for evidence or handover reference.</p>
+                    <strong>อัปโหลดไปยัง Firebase Storage</strong>
+                    <p>แนบรูปภาพประกอบหรืออ้างอิงการส่งมอบได้สูงสุด 5 รูป</p>
                   </div>
                 </label>
                 {uploadError ? <div className={styles.errorText}>{uploadError}</div> : null}
@@ -939,7 +970,7 @@ export function WithdrawPage() {
                 className={styles.primaryButton}
                 disabled={isSubmitting}
                 onClick={handleWithdrawSubmit}
-                title={withdrawSubmitDisabledReason || 'Create withdraw record'}
+                title={withdrawSubmitDisabledReason || 'สร้างรายการเบิก'}
               >
                 {isSubmitting ? <span className={styles.spinner} /> : <CheckCircle2 size={16} />}
                 <span>{isSubmitting ? 'Saving...' : 'Save Withdraw'}</span>
@@ -953,8 +984,8 @@ export function WithdrawPage() {
               <div className={`${styles.modal} ${styles.itemSelectModal}`}>
                 <div className={styles.modalHeader}>
                   <div>
-                    <h3>Select Store Items</h3>
-                    <p>Only active project items with qty greater than 0 are available.</p>
+                    <h3>เลือกรายการในคลัง</h3>
+                    <p>แสดงเฉพาะรายการของโครงการปัจจุบันที่มีจำนวนมากกว่า 0</p>
                   </div>
                   <button
                     type="button"
@@ -973,7 +1004,7 @@ export function WithdrawPage() {
                       type="search"
                       value={itemPickerQuery}
                       onChange={(event) => setItemPickerQuery(event.target.value)}
-                      placeholder="Search receive no, PR, item, vendor, location"
+                      placeholder="ค้นหาเลขที่รับ, PR, รายการ, ผู้ขาย หรือสถานที่"
                     />
                     <div className={styles.selectionNote}>
                       Selected: {selectedItems.length.toLocaleString()}
@@ -984,13 +1015,7 @@ export function WithdrawPage() {
                     <table className={`table compact ${styles.itemPickerTable}`}>
                       <thead>
                         <tr>
-                          <th>Select</th>
-                          <th>Receive No.</th>
-                          <th>Item</th>
-                          <th>Current Location</th>
-                          <th>Vendor</th>
-                          <th>Unit</th>
-                          <th className="numeric">Available Qty</th>
+                          <th>เลือก</th><th>เลขที่รับ</th><th>รายการ</th><th>สถานที่ปัจจุบัน</th><th>ผู้ขาย</th><th>หน่วย</th><th className="numeric">จำนวนคงเหลือ</th>
                         </tr>
                       </thead>
                       <tbody>

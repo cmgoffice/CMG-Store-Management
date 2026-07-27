@@ -8,6 +8,7 @@ import {
 } from 'firebase/firestore';
 import { APP_NAME } from '../config/firestore';
 import { db } from '../firebase';
+import { createStockIdentityDocumentId, normalizeMaterialNo } from '../utils/stockIdentity';
 import type {
   PrPoReceiveItemPayload,
   PrPoReceiveItemResult,
@@ -98,8 +99,13 @@ function makeProjectLabel(projectId: string) {
 
 function normalizeProjectCode(value: unknown) {
   const text = readString(value);
-  const projectMatch = text.match(/\bJ[-\s]?0*(\d+)\b/i);
-  return projectMatch ? `J${Number(projectMatch[1])}` : text;
+  const projectMatch = text.match(/\bJ[-\s]?0*([0-9]+[a-z0-9]*)\b/i);
+  if (projectMatch) {
+    return `J${projectMatch[1].toUpperCase()}`;
+  }
+
+  const plainProjectMatch = text.match(/\b0*([0-9]+[a-z0-9]*)\b/i);
+  return plainProjectMatch ? `J${plainProjectMatch[1].toUpperCase()}` : text;
 }
 
 function normalizeReceiveType(receiveType: unknown) {
@@ -115,19 +121,19 @@ function getPayloadDate(payload: PrPoReceivePayload) {
 }
 
 function getItemKey(item: PrPoReceiveItemPayload) {
+  const materialNo = normalizeMaterialNo(item.materialNo);
+  if (materialNo) {
+    return {
+      itemKey: materialNo,
+      itemKeyType: 'materialNo' as const,
+    };
+  }
+
   const iditem = readString(item.iditem);
   if (iditem) {
     return {
       itemKey: iditem,
       itemKeyType: 'iditem' as const,
-    };
-  }
-
-  const materialNo = readString(item.materialNo);
-  if (materialNo) {
-    return {
-      itemKey: materialNo,
-      itemKeyType: 'materialNo' as const,
     };
   }
 
@@ -191,7 +197,9 @@ function normalizeReceiveItem(
   const unitPrice = readNumber(item.price) ?? readNumber(item.unitPrice);
   const amount = readNumber(item.amount) ?? (unitPrice ? receivedQty * unitPrice : 0);
   const itemDescription = readString(item.description) || readString(item.itemName) || itemKey.itemKey;
-  const stockItemId = makeDocumentId(`prpo_${itemKey.itemKeyType}`, itemKey.itemKey);
+  const projectCode = normalizeProjectCode(payload.cmgProjectCode) || normalizeProjectCode(payload.projectId);
+  const stockItemId = createStockIdentityDocumentId(projectCode, itemKey.itemKey)
+    || makeDocumentId(`prpo_${itemKey.itemKeyType}`, itemKey.itemKey);
 
   return {
     stockItemId,
@@ -199,7 +207,7 @@ function normalizeReceiveItem(
     itemKey: itemKey.itemKey,
     itemKeyType: itemKey.itemKeyType,
     iditem: readString(item.iditem) || undefined,
-    materialNo: readString(item.materialNo) || undefined,
+    materialNo: normalizeMaterialNo(item.materialNo) || undefined,
     idempotencyKey,
     receivedQty,
     amount,
@@ -286,7 +294,9 @@ async function upsertReceiveItem(
   normalizedItem: NormalizedReceiveItem,
 ): Promise<PrPoReceiveItemResult> {
   const eventRef = doc(db, APP_NAME, 'root', 'prPoReceiveEvents', normalizedItem.eventId);
-  const stockRef = doc(db, APP_NAME, 'root', 'stockItems', normalizedItem.stockItemId);
+  const identityStockRef = doc(db, APP_NAME, 'root', 'stockItems', normalizedItem.stockItemId);
+  const legacyStockItemId = makeDocumentId(`prpo_${normalizedItem.itemKeyType}`, normalizedItem.itemKey);
+  const legacyStockRef = doc(db, APP_NAME, 'root', 'stockItems', legacyStockItemId);
   const projectId = readString(payload.projectId);
   const receiveNo = getPayloadReceiveNo(payload);
   const receiveDate = getPayloadDate(payload);
@@ -296,10 +306,11 @@ async function upsertReceiveItem(
   return runTransaction(db, async (transaction) => {
     const eventSnapshot = await transaction.get(eventRef);
     if (eventSnapshot.exists()) {
+      const existingEvent = eventSnapshot.data();
       return {
         status: 'duplicate',
         message: 'Idempotency key has already been processed; qty was not incremented.',
-        stockItemId: normalizedItem.stockItemId,
+        stockItemId: readString(existingEvent.stockItemId) || normalizedItem.stockItemId,
         itemKey: normalizedItem.itemKey,
         itemKeyType: normalizedItem.itemKeyType,
         idempotencyKey: normalizedItem.idempotencyKey,
@@ -307,7 +318,27 @@ async function upsertReceiveItem(
       };
     }
 
-    const stockSnapshot = await transaction.get(stockRef);
+    const identityStockSnapshot = await transaction.get(identityStockRef);
+    const legacyStockSnapshot = legacyStockItemId === normalizedItem.stockItemId
+      ? identityStockSnapshot
+      : await transaction.get(legacyStockRef);
+    const legacyStockData = legacyStockSnapshot.exists() ? legacyStockSnapshot.data() : undefined;
+    const legacyProjectCode = legacyStockData
+      ? normalizeProjectCode(
+        legacyStockData.cmgProjectCode ||
+        legacyStockData.projectId ||
+        legacyStockData.purchasedForProject ||
+        legacyStockData.location
+      )
+      : '';
+    const canReuseLegacyStock =
+      !identityStockSnapshot.exists() &&
+      legacyStockSnapshot.exists() &&
+      legacyProjectCode === cmgProjectCode;
+    const stockRef = canReuseLegacyStock ? legacyStockRef : identityStockRef;
+    const stockSnapshot = canReuseLegacyStock ? legacyStockSnapshot : identityStockSnapshot;
+    const actualStockItemId = canReuseLegacyStock ? legacyStockItemId : normalizedItem.stockItemId;
+
     if (stockSnapshot.exists()) {
       transaction.update(stockRef, {
         qty: increment(normalizedItem.receivedQty),
@@ -346,13 +377,16 @@ async function upsertReceiveItem(
         lastReceivedAt: receiveDate,
       });
     } else {
-      transaction.set(stockRef, getStockItemForCreate(payload, normalizedItem));
+      transaction.set(stockRef, getStockItemForCreate(payload, {
+        ...normalizedItem,
+        stockItemId: actualStockItemId,
+      }));
     }
 
     transaction.set(eventRef, stripUndefined({
       id: normalizedItem.eventId,
       idempotencyKey: normalizedItem.idempotencyKey,
-      stockItemId: normalizedItem.stockItemId,
+      stockItemId: actualStockItemId,
       itemKey: normalizedItem.itemKey,
       itemKeyType: normalizedItem.itemKeyType,
       iditem: normalizedItem.iditem,
@@ -390,7 +424,7 @@ async function upsertReceiveItem(
       message: stockSnapshot.exists()
         ? 'Existing item was updated with atomic qty increment.'
         : 'New incoming item was created.',
-      stockItemId: normalizedItem.stockItemId,
+      stockItemId: actualStockItemId,
       itemKey: normalizedItem.itemKey,
       itemKeyType: normalizedItem.itemKeyType,
       idempotencyKey: normalizedItem.idempotencyKey,

@@ -79,6 +79,7 @@ export function DispatchPage() {
     stockItems,
     dispatchRecords,
     createDispatch,
+    cancelDispatch,
     activeProjectNo,
   } = useInventory();
   const { canDispatch } = useRole();
@@ -96,6 +97,7 @@ export function DispatchPage() {
   const [selectedPendingReceipt, setSelectedPendingReceipt] = useState<DispatchRecord | null>(null);
   const [itemPickerQuery, setItemPickerQuery] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [cancellingDispatchId, setCancellingDispatchId] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState('');
   const [submitError, setSubmitError] = useState('');
 
@@ -177,7 +179,9 @@ export function DispatchPage() {
           .join(' ')
           .toLowerCase()
           .includes(normalizedQuery);
-      return wasSentFromActiveProject && record.status === 'Pending Receipt' && matchesQuery;
+      return wasSentFromActiveProject &&
+        (record.status === 'Pending Receipt' || record.status === 'Dispatch Cancelled') &&
+        matchesQuery;
     });
   }, [activeProjectNo, dispatchRecords, normalizedQuery]);
 
@@ -353,11 +357,34 @@ export function DispatchPage() {
     setSelectedPendingReceipt(null);
   };
 
+  const handleCancelDispatch = async (record: DispatchRecord) => {
+    if (!canDispatch || cancellingDispatchId || record.status !== 'Pending Receipt') {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `ยืนยันการยกเลิกรายการจัดส่ง ${record.dispatchNo}? จำนวนสินค้าจะถูกคืนกลับไปยัง Store ต้นทาง`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setCancellingDispatchId(record.id);
+    try {
+      await cancelDispatch(record.id);
+    } catch (error) {
+      console.error('Failed to cancel dispatch:', error);
+      window.alert(error instanceof Error ? error.message : 'Failed to cancel the dispatch. Please try again.');
+    } finally {
+      setCancellingDispatchId(null);
+    }
+  };
+
   return (
     <div>
       <PageHeader
         eyebrow="Store"
-        title="Dispatch"
+        title="จัดส่งสินค้า"
         description={
           activeProject
             ? `Dispatch stock from Store of Project ${activeProject.projectNo}. Sent items wait here until the destination project receives them.`
@@ -368,17 +395,17 @@ export function DispatchPage() {
             <SearchField
               value={query}
               onChange={setQuery}
-              placeholder="Search waiting dispatch records"
+              placeholder="ค้นหารายการจัดส่งที่รอรับ"
             />
             <button
               className={styles.primaryButton}
               type="button"
               disabled={!canDispatch}
               onClick={handleOpenModal}
-              title={dispatchUnavailableReason || 'Create dispatch request'}
+              title={dispatchUnavailableReason || 'สร้างรายการจัดส่ง'}
             >
               <Send size={16} />
-              <span>Dispatch Selected</span>
+              <span>จัดส่งรายการที่เลือก</span>
             </button>
           </>
         }
@@ -393,24 +420,17 @@ export function DispatchPage() {
       <section className={styles.panel}>
         <div className={styles.sectionHeader}>
           <div>
-            <h2>Waiting for Receipt</h2>
+            <h2>รอการรับสินค้า</h2>
             <p>รายการที่โปรเจกต์ปัจจุบันส่งออกแล้ว รอปลายทางรับเข้าที่ Receiving แท็บ ย้ายโครงการ</p>
           </div>
           <div className={styles.selectionNote}>Active: {activeProject?.projectNo ?? '-'}</div>
         </div>
 
         <div className="tableScroll">
-          <table className="table">
+          <table className={`table compact ${styles.dispatchTable}`}>
             <thead>
               <tr>
-                <th>Dispatch No.</th>
-                <th>Route</th>
-                <th>Dispatched At</th>
-                <th>Vehicle Plate</th>
-                <th>Items</th>
-                <th>Attachment</th>
-                <th>Sent By</th>
-                <th>Status</th>
+                <th>เลขที่จัดส่ง</th><th>เส้นทาง</th><th>วันที่จัดส่ง</th><th>ทะเบียนรถ</th><th>รายการ</th><th>เอกสารแนบ</th><th>ผู้ส่ง</th><th>สถานะ</th>
               </tr>
             </thead>
             <tbody>
@@ -429,17 +449,32 @@ export function DispatchPage() {
                   aria-label={`Open dispatch ${record.dispatchNo} details`}
                 >
                   <td>
-                    <span className={styles.dispatchCode}>{record.dispatchNo}</span>
+                    <div className={styles.dispatchCodeCell}>
+                      <span className={styles.dispatchCode}>{record.dispatchNo}</span>
+                      {record.status === 'Pending Receipt' ? (
+                        <button
+                          type="button"
+                          className={styles.cancelButton}
+                          disabled={!canDispatch || cancellingDispatchId === record.id}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleCancelDispatch(record);
+                          }}
+                          title={canDispatch ? 'ยกเลิกรายการจัดส่งและคืนยอดไปยัง Store ต้นทาง' : 'เฉพาะ Store Center สามารถยกเลิกรายการจัดส่งได้'}
+                        >
+                          {cancellingDispatchId === record.id ? <span className={styles.spinner} /> : <X size={12} />}
+                          <span>{cancellingDispatchId === record.id ? 'กำลังยกเลิก...' : 'ยกเลิก'}</span>
+                        </button>
+                      ) : null}
+                    </div>
                   </td>
                   <td>
-                    <div className={styles.projectCell}>
-                      <strong>
-                        {record.sourceProjectNo || '-'} to {record.destinationProjectNo}
-                      </strong>
-                      <span>
-                        {record.sourceProjectName || 'Unknown source project'} to {record.destinationProjectName}
-                      </span>
-                    </div>
+                    <strong
+                      className={styles.destinationProjectNo}
+                      title={`ปลายทาง: ${record.destinationProjectNo}${record.destinationProjectName ? ` - ${record.destinationProjectName}` : ''}`}
+                    >
+                      {normalizeProjectNo(record.destinationProjectNo) || '-'}
+                    </strong>
                   </td>
                   <td>{formatDateTime(record.dispatchedAt)}</td>
                   <td>{record.transport || '-'}</td>
@@ -447,7 +482,7 @@ export function DispatchPage() {
                     <div className={styles.itemStack}>
                       {record.items.map((item) => (
                         <span key={`${record.id}-${item.stockReceiveNo}`} className={styles.itemChip}>
-                          {item.receiveNo} / {item.itemDescription} / Qty {item.qty}
+                          <span title={item.itemDescription}>{item.itemDescription}</span>
                         </span>
                       ))}
                       {record.note ? <span className={styles.noteText}>Note: {record.note}</span> : null}
@@ -469,7 +504,7 @@ export function DispatchPage() {
                         ))}
                       </div>
                     ) : (
-                      <span className={styles.mutedText}>No photo</span>
+                      <span className={styles.mutedText}>ไม่มีรูปภาพ</span>
                     )}
                   </td>
                   <td>{record.dispatchedByName}</td>
@@ -495,8 +530,8 @@ export function DispatchPage() {
           <div className={styles.modal}>
             <div className={styles.modalHeader}>
               <div>
-                <h3>Create Dispatch Record</h3>
-                <p>Select store items from the active project, set quantities, then choose the destination project.</p>
+                <h3>สร้างรายการจัดส่ง</h3>
+                <p>เลือกรายการจากคลังของโครงการปัจจุบัน ระบุจำนวน แล้วเลือกโครงการปลายทาง</p>
               </div>
               <button type="button" className={styles.iconButton} onClick={closeModal} aria-label="Close modal">
                 <X size={18} />
@@ -505,13 +540,13 @@ export function DispatchPage() {
 
             <div className={styles.modalBody}>
               <div className={styles.modalInfo}>
-                <span>Source Project</span>
+                <span>โครงการต้นทาง</span>
                 <strong>{activeProject ? `Project ${activeProject.projectNo} - ${activeProject.projectName}` : '-'}</strong>
               </div>
 
               <div className={styles.formGrid}>
                 <label className={styles.field}>
-                  <span>Destination Project</span>
+                  <span>โครงการปลายทาง</span>
                   {destinationProjects.length > 0 ? (
                     <select
                       className={styles.select}
@@ -525,32 +560,32 @@ export function DispatchPage() {
                       ))}
                     </select>
                   ) : (
-                    <div className={styles.emptyInline}>No other active project is available.</div>
+                    <div className={styles.emptyInline}>ไม่มีโครงการที่ใช้งานอยู่อื่น</div>
                   )}
                 </label>
 
                 <label className={styles.field}>
-                  <span>Vehicle Registration</span>
+                  <span>ทะเบียนรถ</span>
                   <input
                     className={styles.input}
                     type="text"
                     value={transport}
                     onChange={(event) => setTransport(event.target.value)}
-                    placeholder="Truck plate or transport registration"
+                    placeholder="ทะเบียนรถบรรทุกหรือยานพาหนะ"
                   />
                 </label>
               </div>
 
               <div className={styles.field}>
                 <div className={styles.fieldHeader}>
-                  <span>Items and Quantity</span>
+                  <span>รายการและจำนวน</span>
                   <button
                     className={styles.selectItemsButton}
                     type="button"
                     onClick={() => setIsItemPickerOpen(true)}
                   >
                     <ListPlus size={16} />
-                    <span>Select</span>
+                    <span>เลือก</span>
                   </button>
                 </div>
 
@@ -561,11 +596,7 @@ export function DispatchPage() {
                 ) : (
                   <div className={styles.selectedItemsTable}>
                     <div className={styles.selectedItemsHead}>
-                      <span>Receive No.</span>
-                      <span>Item</span>
-                      <span>Available</span>
-                      <span>Dispatch Qty</span>
-                      <span>Action</span>
+                      <span>เลขที่รับ</span><span>รายการ</span><span>คงเหลือ</span><span>จำนวนจัดส่ง</span><span>การดำเนินการ</span>
                     </div>
                     <div className={styles.selectedItemsBody}>
                       {selectedItems.map((item) => {
@@ -592,7 +623,7 @@ export function DispatchPage() {
                               type="button"
                               onClick={() => removeSelectedItem(stockItemId)}
                               aria-label={`Remove ${item.receiveNo}`}
-                              title="Remove item"
+                              title="ลบรายการ"
                             >
                               <Trash2 size={15} />
                             </button>
@@ -605,24 +636,24 @@ export function DispatchPage() {
               </div>
 
               <label className={styles.field}>
-                <span>Remark / Note</span>
+                <span>หมายเหตุ</span>
                 <textarea
                   className={styles.textarea}
                   value={note}
                   onChange={(event) => setNote(event.target.value)}
-                  placeholder="Add handling note, urgent request, or delivery instruction"
+                  placeholder="ระบุหมายเหตุ คำขอเร่งด่วน หรือคำแนะนำในการจัดส่ง"
                   rows={4}
                 />
               </label>
 
               <div className={styles.field}>
-                <span>Product Photos</span>
+                <span>รูปภาพสินค้า</span>
                 <label className={styles.uploadBox}>
                   <input type="file" accept="image/*" multiple onChange={handleFileChange} />
                   <ImagePlus size={18} />
                   <div>
-                    <strong>Upload to Firebase Storage</strong>
-                    <p>Attach up to 5 product or vehicle photos for this dispatch.</p>
+                    <strong>อัปโหลดไปยัง Firebase Storage</strong>
+                    <p>แนบรูปภาพสินค้าหรือยานพาหนะได้สูงสุด 5 รูป</p>
                   </div>
                 </label>
                 {uploadError ? <div className={styles.errorText}>{uploadError}</div> : null}
@@ -654,7 +685,7 @@ export function DispatchPage() {
                 className={styles.primaryButton}
                 disabled={isSubmitting}
                 onClick={handleDispatchSubmit}
-                title={dispatchSubmitDisabledReason || 'Create dispatch'}
+                title={dispatchSubmitDisabledReason || 'สร้างรายการจัดส่ง'}
               >
                 {isSubmitting ? (
                   <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
@@ -672,8 +703,8 @@ export function DispatchPage() {
               <div className={`${styles.modal} ${styles.itemSelectModal}`}>
                 <div className={styles.modalHeader}>
                   <div>
-                    <h3>Select Store Inventory Items</h3>
-                    <p>Choose one or more available items from the active project store.</p>
+                    <h3>เลือกรายการสินค้าในคลัง</h3>
+                    <p>เลือกรายการที่คงเหลืออย่างน้อยหนึ่งรายการจากคลังโครงการปัจจุบัน</p>
                   </div>
                   <button
                     type="button"
@@ -692,7 +723,7 @@ export function DispatchPage() {
                       type="search"
                       value={itemPickerQuery}
                       onChange={(event) => setItemPickerQuery(event.target.value)}
-                      placeholder="Search receive no, PR, item, vendor, location"
+                      placeholder="ค้นหาเลขที่รับ, PR, รายการ, ผู้ขาย หรือสถานที่"
                     />
                     <div className={styles.selectionNote}>
                       Selected: {selectedItems.length.toLocaleString()}
@@ -703,12 +734,7 @@ export function DispatchPage() {
                     <table className={`table compact ${styles.itemPickerTable}`}>
                       <thead>
                         <tr>
-                          <th>Select</th>
-                          <th>Receive No.</th>
-                          <th>Item</th>
-                          <th>Current Location</th>
-                          <th>Vendor</th>
-                          <th className="numeric">Available Qty</th>
+                          <th>เลือก</th><th>เลขที่รับ</th><th>รายการ</th><th>สถานที่ปัจจุบัน</th><th>ผู้ขาย</th><th className="numeric">จำนวนคงเหลือ</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -779,8 +805,8 @@ export function DispatchPage() {
           <div className={`${styles.modal} ${styles.detailModal}`}>
             <div className={styles.modalHeader}>
               <div>
-                <h3>Dispatch Details</h3>
-                <p>Review the dispatch waiting for receipt at the destination project.</p>
+                <h3>รายละเอียดการจัดส่ง</h3>
+                <p>ตรวจสอบรายการจัดส่งที่รอรับ ณ โครงการปลายทาง</p>
               </div>
               <button
                 type="button"
@@ -795,7 +821,7 @@ export function DispatchPage() {
             <div className={styles.modalBody}>
               <div className={styles.detailHero}>
                 <div className={styles.modalInfo}>
-                  <span>Dispatch No.</span>
+                  <span>เลขที่จัดส่ง</span>
                   <strong>{selectedPendingReceipt.dispatchNo}</strong>
                 </div>
                 <StatusBadge status={selectedPendingReceipt.status} />
@@ -803,7 +829,7 @@ export function DispatchPage() {
 
               <div className={styles.detailGrid}>
                 <div className={styles.detailCard}>
-                  <span>Route</span>
+                  <span>เส้นทาง</span>
                   <strong>
                     {selectedPendingReceipt.sourceProjectNo || '-'} to {selectedPendingReceipt.destinationProjectNo || '-'}
                   </strong>
@@ -814,33 +840,29 @@ export function DispatchPage() {
                 </div>
 
                 <div className={styles.detailCard}>
-                  <span>Vehicle Plate</span>
+                  <span>ทะเบียนรถ</span>
                   <strong>{selectedPendingReceipt.transport || '-'}</strong>
                   <p>Dispatched at {formatDateTime(selectedPendingReceipt.dispatchedAt)}</p>
                 </div>
 
                 <div className={styles.detailCard}>
-                  <span>Sent By</span>
+                  <span>ผู้ส่ง</span>
                   <strong>{selectedPendingReceipt.dispatchedByName || '-'}</strong>
                   <p>{selectedPendingReceipt.dispatchedByEmail || '-'}</p>
                 </div>
 
                 <div className={styles.detailCard}>
-                  <span>Total Qty</span>
+                  <span>จำนวนรวม</span>
                   <strong>{selectedPendingReceipt.totalQty.toLocaleString()}</strong>
                   <p>{selectedPendingReceipt.items.length.toLocaleString()} item line(s)</p>
                 </div>
               </div>
 
               <div className={styles.field}>
-                <span>Items</span>
+                <span>รายการ</span>
                 <div className={styles.detailItemsTable}>
                   <div className={styles.detailItemsHead}>
-                    <span>Receive No.</span>
-                    <span>PR / PO</span>
-                    <span>Item</span>
-                    <span>Qty</span>
-                    <span>Source Location</span>
+                    <span>เลขที่รับ</span><span>PR / PO</span><span>รายการ</span><span>จำนวน</span><span>สถานที่ต้นทาง</span>
                   </div>
                   <div className={styles.selectedItemsBody}>
                     {selectedPendingReceipt.items.map((item) => (
@@ -864,14 +886,14 @@ export function DispatchPage() {
 
               <div className={styles.formGrid}>
                 <div className={styles.field}>
-                  <span>Remark / Note</span>
+                  <span>หมายเหตุ</span>
                   <div className={styles.detailTextBlock}>
                     {selectedPendingReceipt.note?.trim() || 'No remark provided.'}
                   </div>
                 </div>
 
                 <div className={styles.field}>
-                  <span>Attachments</span>
+                  <span>เอกสารแนบ</span>
                   {selectedPendingReceipt.photoUrls.length > 0 ? (
                     <div className={styles.photoList}>
                       {selectedPendingReceipt.photoUrls.map((url, index) => (
@@ -887,7 +909,7 @@ export function DispatchPage() {
                       ))}
                     </div>
                   ) : (
-                    <div className={styles.detailTextBlock}>No photo attached.</div>
+                    <div className={styles.detailTextBlock}>ไม่มีรูปภาพแนบ</div>
                   )}
                 </div>
               </div>

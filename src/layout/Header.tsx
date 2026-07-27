@@ -1,28 +1,23 @@
 import React, { useState } from 'react';
-import { Bell, ChevronDown, Search, ShieldCheck, LogOut, User as UserIcon, X, Settings } from 'lucide-react';
-import { useRole } from '../context/RoleContext';
+import { Bell, Search, LogOut, User as UserIcon, X, Settings } from 'lucide-react';
+import { ITEM_TYPE_OPTIONS, getItemTypeOption } from '../constants/itemTypes';
 import { useAuth } from '../context/AuthContext';
-import { useNavigate } from 'react-router-dom';
-import type { UserRole } from '../types/models';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useDialog } from '../context/DialogContext';
+import { useLanguage } from '../context/LanguageContext';
 import styles from './Header.module.css';
 
 interface HeaderProps {
   menuButton: React.ReactNode;
 }
 
-const roleLabels: Record<UserRole, string> = {
-  'MasterAdmin': 'MasterAdmin',
-  'Store Center': 'Store Center',
-  'Admin Site': 'Admin Site',
-  'Store Site': 'Store Site',
-  'Keeper': 'Keeper',
-  'Staff': 'Staff',
-};
-
 export function Header({ menuButton }: HeaderProps) {
-  const { activeRole, roles, setActiveRole } = useRole();
   const { userProfile, updateProfile, logout } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const { showAlert } = useDialog();
+  const { language, setLanguage } = useLanguage();
+  const selectedItemType = getItemTypeOption(searchParams.get('itemType') ?? '')?.code ?? '';
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -52,10 +47,23 @@ export function Header({ menuButton }: HeaderProps) {
     setIsDropdownOpen(false);
   };
 
+  const handleItemTypeChange = (value: string) => {
+    const nextSearchParams = new URLSearchParams(searchParams);
+    const itemType = getItemTypeOption(value)?.code;
+
+    if (itemType) {
+      nextSearchParams.set('itemType', itemType);
+    } else {
+      nextSearchParams.delete('itemType');
+    }
+
+    setSearchParams(nextSearchParams, { replace: true });
+  };
+
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!firstName || !lastName || !position) {
-      alert('Please fill in all fields.');
+      await showAlert('กรุณากรอกข้อมูลให้ครบทุกช่อง', { title: 'ข้อมูลไม่ครบถ้วน', variant: 'warning' });
       return;
     }
 
@@ -65,7 +73,7 @@ export function Header({ menuButton }: HeaderProps) {
       setIsModalOpen(false);
     } catch (err) {
       console.error('Failed to update profile:', err);
-      alert('Failed to update profile settings.');
+      await showAlert('ไม่สามารถบันทึกการตั้งค่าโปรไฟล์ได้ กรุณาลองใหม่อีกครั้ง', { variant: 'error' });
     } finally {
       setIsSaving(false);
     }
@@ -77,43 +85,51 @@ export function Header({ menuButton }: HeaderProps) {
         <div className={styles.left}>
           {menuButton}
           <div>
-            <p className={styles.system}>CMG Store Management</p>
-            <span>Inventory, dispatch, and site receiving</span>
+            <p className={styles.system}>ระบบจัดการคลังสินค้า CMG</p>
+            <span>สินค้าคงคลัง การจัดส่ง และการรับสินค้าหน้างาน</span>
           </div>
         </div>
         
         <label className={styles.searchBar}>
-          <select aria-label="Search category">
-            <option>All Category</option>
-            <option>Stock</option>
-            <option>Project</option>
-            <option>Shipment</option>
+          <select
+            aria-label="หมวดหมู่สำหรับค้นหา"
+            value={selectedItemType}
+            onChange={(event) => handleItemTypeChange(event.target.value)}
+          >
+            <option value="">ทุกหมวดหมู่</option>
+            <optgroup label="Type 1">
+              {ITEM_TYPE_OPTIONS.filter((option) => option.group === 'Type 1').map((option) => (
+                <option key={option.code} value={option.code}>
+                  {option.code} — {option.label}
+                </option>
+              ))}
+            </optgroup>
+            <optgroup label="Type 2">
+              {ITEM_TYPE_OPTIONS.filter((option) => option.group === 'Type 2').map((option) => (
+                <option key={option.code} value={option.code}>
+                  {option.code} — {option.label}
+                </option>
+              ))}
+            </optgroup>
           </select>
-          <input type="search" placeholder="Search here....." />
+          <input type="search" placeholder="ค้นหาที่นี่..." />
           <Search size={18} aria-hidden="true" />
         </label>
 
         <div className={styles.actions}>
-          <button className={styles.iconButton} type="button" aria-label="Alerts">
+          <button className={styles.iconButton} type="button" aria-label="การแจ้งเตือน">
             <Bell size={18} />
           </button>
 
-          {/* Role Selector Dropdown */}
-          <label className={styles.roleSwitcher}>
-            <ShieldCheck size={16} aria-hidden="true" />
-            <select
-              aria-label="Switch active role"
-              value={activeRole}
-              onChange={(event) => setActiveRole(event.target.value as UserRole)}
-            >
-              {roles.map((role) => (
-                <option key={role} value={role}>
-                  {roleLabels[role] || role}
-                </option>
-              ))}
-            </select>
-            <ChevronDown size={16} aria-hidden="true" />
-          </label>
+          <button
+            className={styles.languageButton}
+            type="button"
+            onClick={() => setLanguage(language === 'th' ? 'en' : 'th')}
+            aria-label={language === 'th' ? 'Switch to English' : 'เปลี่ยนเป็นภาษาไทย'}
+            title={language === 'th' ? 'Switch to English' : 'เปลี่ยนเป็นภาษาไทย'}
+          >
+            {language === 'th' ? 'EN' : 'TH'}
+          </button>
 
           {/* User Profile Avatar with dropdown list */}
           <div className="relative overflow-visible">
@@ -121,7 +137,7 @@ export function Header({ menuButton }: HeaderProps) {
               onClick={() => setIsDropdownOpen(!isDropdownOpen)}
               className={styles.avatarButton}
               type="button"
-              aria-label="User profile options"
+              aria-label="ตัวเลือกโปรไฟล์ผู้ใช้"
             >
               {userProfile?.photoURL ? (
                 <img
@@ -157,7 +173,7 @@ export function Header({ menuButton }: HeaderProps) {
                       className={styles.dropdownItem}
                     >
                       <Settings size={14} />
-                      <span>Edit Profile</span>
+                      <span>แก้ไขโปรไฟล์</span>
                     </button>
                     <button
                       type="button"
@@ -165,7 +181,7 @@ export function Header({ menuButton }: HeaderProps) {
                       className={`${styles.dropdownItem} text-red-600 hover:bg-red-50`}
                     >
                       <LogOut size={14} />
-                      <span>Logout</span>
+                      <span>ออกจากระบบ</span>
                     </button>
                   </div>
                 </div>
@@ -184,8 +200,8 @@ export function Header({ menuButton }: HeaderProps) {
           >
             <div className="p-6 border-b border-slate-100 flex items-center justify-between">
               <div>
-                <h3 className="text-base font-black text-slate-800">Edit Profile</h3>
-                <p className="text-xs text-slate-500">Update your account settings</p>
+                <h3 className="text-base font-black text-slate-800">แก้ไขโปรไฟล์</h3>
+                <p className="text-xs text-slate-500">อัปเดตการตั้งค่าบัญชีของคุณ</p>
               </div>
               <button
                 type="button"

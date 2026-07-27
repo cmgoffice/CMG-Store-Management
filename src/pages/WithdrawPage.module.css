@@ -47,6 +47,27 @@
   padding: 0 12px;
 }
 
+.cancelButton {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fff5f5;
+  color: #b91c1c;
+  font: inherit;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 0 8px;
+}
+
+.cancelButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
 .ghostButton {
   min-height: 42px;
   border: 1px solid var(--color-outline-variant);
@@ -128,27 +149,27 @@
 .summaryGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-  margin-bottom: 18px;
+  gap: 10px;
+  margin-bottom: 12px;
 }
 
 .summaryCard {
   display: flex;
   align-items: center;
-  gap: 14px;
-  padding: 18px;
+  gap: 10px;
+  padding: 10px 14px;
   border: 1px solid #dce6f8;
-  border-radius: 20px;
+  border-radius: 14px;
   background: linear-gradient(145deg, #fff 0%, #f4f8ff 100%);
-  box-shadow: 0 18px 32px rgb(48 90 145 / 8%);
+  box-shadow: 0 8px 18px rgb(48 90 145 / 6%);
 }
 
 .summaryIcon {
   display: grid;
   place-items: center;
-  width: 42px;
-  height: 42px;
-  border-radius: 14px;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
   background: #eaf3ff;
   color: #0b5cad;
 }
@@ -160,16 +181,16 @@
 
 .summaryLabel {
   color: var(--color-text-muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
-  line-height: 16px;
+  line-height: 14px;
 }
 
 .summaryValue {
   color: #123257;
-  font-size: 28px;
+  font-size: 22px;
   font-weight: 800;
-  line-height: 32px;
+  line-height: 26px;
 }
 
 .panel {
@@ -217,10 +238,60 @@
 }
 
 .withdrawCode {
-  display: block;
   color: #0f3f6e;
   font-size: 12px;
   font-weight: 800;
+}
+
+.withdrawTable {
+  min-width: 1210px;
+}
+
+.withdrawTable td {
+  white-space: nowrap;
+}
+
+.withdrawTable td:nth-child(4) .stackCell span,
+.withdrawTable td:nth-child(5) .stackCell span,
+.withdrawTable td:nth-child(9) .stackCell span,
+.withdrawTable .subText {
+  display: none;
+}
+
+.withdrawTable .itemStack,
+.withdrawTable .photoList {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.withdrawTable .itemChip {
+  padding: 2px 7px;
+  font-size: 10px;
+  line-height: 14px;
+  white-space: nowrap;
+}
+
+.withdrawQtyCell {
+  min-width: 48px;
+  font-weight: 800;
+}
+
+.qtyStack {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.withdrawTable .photoLink {
+  font-size: 10px;
+}
+
+.withdrawTable :global(.badge) {
+  min-height: 20px;
+  padding: 3px 8px;
+  font-size: 10px;
 }
 
 .subText,

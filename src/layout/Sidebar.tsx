@@ -36,30 +36,30 @@ interface SidebarProps {
 
 const groups = [
   {
-    label: 'Project',
+    label: 'โครงการ',
     icon: FolderKanban,
-    items: [{ to: '/projects', label: 'Projects', icon: FolderKanban }],
+    items: [{ to: '/projects', label: 'รายการโครงการ', icon: FolderKanban }],
   },
   {
-    label: 'Overview',
+    label: 'ภาพรวม',
     icon: LayoutDashboard,
     items: [
-      { to: '/', label: 'Dashboard', icon: BarChart3 },
+      { to: '/', label: 'แดชบอร์ด', icon: BarChart3 },
     ],
   },
   {
-    label: 'Inventory',
+    label: 'สินค้าคงคลัง',
     icon: PackageCheck,
-    items: [{ to: '/store/stock', label: 'Inventory', icon: PackageCheck }],
+    items: [{ to: '/store/stock', label: 'สินค้าคงคลัง', icon: PackageCheck }],
   },
   {
-    label: 'Stock',
+    label: 'คลังสินค้า',
     icon: Boxes,
     items: [
-      { to: '/receiving', label: 'Receiving', icon: ClipboardCheck, actionKey: 'receiving' as const },
-      { to: '/store/store', label: 'Store', icon: Store },
-      { to: '/store/withdraw', label: 'Withdraw', icon: PackageMinus, actionKey: 'withdraw' as const },
-      { to: '/store/dispatch', label: 'Dispatch', icon: SendToBack, actionKey: 'dispatch' as const },
+      { to: '/receiving', label: 'รับสินค้า', icon: ClipboardCheck, actionKey: 'receiving' as const },
+      { to: '/store/store', label: 'คลังโครงการ', icon: Store },
+      { to: '/store/withdraw', label: 'เบิกสินค้า', icon: PackageMinus, actionKey: 'withdraw' as const },
+      { to: '/store/dispatch', label: 'จัดส่งสินค้า', icon: SendToBack, actionKey: 'dispatch' as const },
     ],
   },
 ];
@@ -116,29 +116,38 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
     withdrawRecords,
   } = useInventory();
   const { userProfile, logout } = useAuth();
-  const { activeRole } = useRole();
+  const { roleLabel, hasRole, hasAnyRole, canDispatch } = useRole();
   const navigate = useNavigate();
+  const canManageProjects = hasRole('MasterAdmin');
+  const canAccessDispatch = hasAnyRole([
+    'MasterAdmin',
+    'Store Center',
+    'Admin Site',
+    'Store Site',
+    'Staff',
+  ]);
+  const isMasterAdmin = hasRole('MasterAdmin');
 
-  // Filter sidebar groups based on activeRole
+  // A menu is available when any assigned role grants access to it.
   const filteredGroups = useMemo(() => {
     return groups
       .map((group) => {
         const filteredItems = group.items.filter((item) => {
           if (item.to === '/projects') {
-            return !['Store Center', 'Store Site', 'Keeper'].includes(activeRole);
+            return canManageProjects;
           }
           if (item.to === '/store/stock') {
-            return ['MasterAdmin', 'Store Center'].includes(activeRole);
+            return canDispatch;
           }
           if (item.to === '/store/dispatch') {
-            return activeRole !== 'Keeper';
+            return canAccessDispatch;
           }
           return true;
         });
         return { ...group, items: filteredItems };
       })
       .filter((group) => group.items.length > 0);
-  }, [activeRole]);
+  }, [canAccessDispatch, canDispatch, canManageProjects]);
   const location = useLocation();
   const miniProjects = useMemo(
     () => activeProjects.map((project, index) => ({ project, index })),
@@ -195,7 +204,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
       }
 
       if (
-        ['MasterAdmin', 'Store Center'].includes(activeRole) &&
+        canDispatch &&
         item.status === 'Pending Dispatch'
       ) {
         increment(projectCode);
@@ -209,7 +218,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
     });
 
     return Object.fromEntries(counts);
-  }, [activeRole, receivingRequests, stockItems, withdrawRecords]);
+  }, [canDispatch, receivingRequests, stockItems, withdrawRecords]);
 
   const actionBadges = useMemo<Record<ActionMenuKey, { count: number; title: string }>>(() => {
     const isForActiveProject = (projectCode: string) =>
@@ -237,7 +246,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
       return item.status === 'In Transit' && isForActiveProject(projectCode);
     }).length;
 
-    const dispatchableCount = ['MasterAdmin', 'Store Center'].includes(activeRole)
+    const dispatchableCount = canDispatch
       ? stockItems.filter(
         (item) =>
           item.status === 'Pending Dispatch' &&
@@ -275,7 +284,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
         title: `Dispatch รอ Action ${dispatchableCount} รายการ`,
       },
     };
-  }, [activeProjectNo, activeRole, normalizedActiveProjectNo, receivingRequests, stockItems, withdrawRecords]);
+  }, [activeProjectNo, canDispatch, normalizedActiveProjectNo, receivingRequests, stockItems, withdrawRecords]);
 
   const [pendingCount, setPendingCount] = useState(0);
 
@@ -292,7 +301,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
           } ${styles[`projectTone${(index % 4) + 1}`]}`}
           type="button"
           title={`${project.projectNo} - ${project.projectName}`}
-          aria-label={`Switch to ${project.projectNo}${badgeCount > 0 ? ` (${badgeCount} pending items)` : ''}`}
+          aria-label={`เปลี่ยนเป็น ${project.projectNo}${badgeCount > 0 ? ` (${badgeCount} รายการรอดำเนินการ)` : ''}`}
           aria-pressed={activeProjectNo === project.projectNo}
           onClick={(e) => {
             e.stopPropagation();
@@ -302,7 +311,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
           {getMiniProjectLabel(project.projectNo)}
         </button>
         {badgeCount > 0 ? (
-          <span className={styles.projectBadge} aria-label={`${project.projectNo} has ${badgeCount} pending items`}>
+          <span className={styles.projectBadge} aria-label={`${project.projectNo} มี ${badgeCount} รายการรอดำเนินการ`}>
             {formatBadgeCount(badgeCount)}
           </span>
         ) : null}
@@ -363,7 +372,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
       <aside className={`${styles.sidebar} ${isOpen ? styles.open : ''} ${isCollapsed ? styles.collapsedSidebar : ''}`}>
         <div
           className={styles.miniRail}
-          aria-label="Project quick switcher"
+          aria-label="ตัวเลือกเปลี่ยนโครงการด่วน"
           role="button"
           tabIndex={0}
           onClick={onToggleCollapse}
@@ -389,11 +398,11 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
                 {regularMiniProjects.map(({ project, index }) => renderMiniProjectButton(project, index))}
               </div>
             ) : null}
-            {!['Store Center', 'Store Site', 'Keeper'].includes(activeRole) && (
+            {canManageProjects && (
               <NavLink
                 className={styles.addProject}
                 to="/projects"
-                aria-label="Open project list"
+                aria-label="เปิดรายการโครงการ"
                 onClick={(e) => {
                   e.stopPropagation();
                   onClose();
@@ -411,7 +420,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
                 e.stopPropagation();
                 onToggleCollapse();
               }}
-              aria-label="Expand navigation"
+              aria-label="ขยายเมนูนำทาง"
             >
               <ChevronRight size={18} />
             </button>
@@ -421,21 +430,21 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
         <div className={styles.menuPanel}>
           <div className={styles.brand}>
             <div className={styles.branchSelect}>
-              <span>{activeProject?.projectNo ?? 'Project'}</span>
+              <span>{activeProject?.projectNo ?? 'โครงการ'}</span>
               <ChevronDown size={14} aria-hidden="true" />
             </div>
             <button
               className={styles.collapse}
               type="button"
               onClick={onToggleCollapse}
-              aria-label="Collapse navigation"
+              aria-label="ย่อเมนูนำทาง"
             >
               <ChevronLeft size={18} />
             </button>
             <button
               className={styles.close}
               type="button"
-              aria-label="Close navigation"
+              aria-label="ปิดเมนูนำทาง"
               onClick={onClose}
             >
               <X size={18} />
@@ -458,13 +467,13 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
                   {userProfile.firstName} {userProfile.lastName}
                 </div>
                 <div className={styles.profileCardRole}>
-                  {activeRole}
+                  {roleLabel}
                 </div>
               </div>
             </div>
           )}
 
-          <nav className={styles.nav} aria-label="Main navigation">
+          <nav className={styles.nav} aria-label="เมนูหลัก">
             {filteredGroups.map((group) => {
               const isExpanded = !!openGroups[group.label];
               const groupPendingCount = group.items.reduce((sum, item) => {
@@ -526,7 +535,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
           </nav>
 
           <div className={styles.bottomNav}>
-            {activeRole === 'MasterAdmin' && (
+            {isMasterAdmin && (
               <NavLink
                 className={({ isActive }) => `${styles.link} ${isActive ? styles.active : ''}`}
                 to="/admin"
@@ -535,7 +544,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
               >
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                   <ShieldCheck size={20} />
-                  <span>User Mgmt</span>
+                  <span>จัดการผู้ใช้</span>
                 </div>
                 {pendingCount > 0 && (
                   <span className={styles.pendingBadge}>
@@ -544,10 +553,10 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
                 )}
               </NavLink>
             )}
-            {!['Store Center', 'Store Site', 'Keeper'].includes(activeRole) && (
+            {canManageProjects && (
               <NavLink className={styles.link} to="/projects" onClick={onClose}>
                 <Settings size={20} />
-                <span>Settings</span>
+                <span>ตั้งค่า</span>
               </NavLink>
             )}
             <button
@@ -563,7 +572,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
               }}
             >
               <LogOut size={20} />
-              <span>Logout</span>
+              <span>ออกจากระบบ</span>
             </button>
           </div>
         </div>
@@ -572,7 +581,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
         <button
           className={styles.overlay}
           type="button"
-          aria-label="Close navigation overlay"
+          aria-label="ปิดเมนูนำทาง"
           onClick={onClose}
         />
       ) : null}

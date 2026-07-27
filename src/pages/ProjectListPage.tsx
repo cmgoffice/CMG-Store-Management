@@ -76,14 +76,14 @@ export function ProjectListPage() {
   return (
     <div>
       <PageHeader
-        eyebrow="Project"
-        title="Project List"
-        description="Projects can come from app data or MasterData. Status stays editable in this app, while synced MasterData fields remain read-only."
+        eyebrow="โครงการ"
+        title="รายการโครงการ"
+        description="โครงการอาจมาจากข้อมูลในระบบหรือ MasterData สามารถแก้ไขสถานะได้ในระบบนี้ ส่วนข้อมูลที่ซิงก์จาก MasterData จะเป็นแบบอ่านอย่างเดียว"
         actions={
           <SearchField
             value={query}
             onChange={setQuery}
-            placeholder="Search projects"
+            placeholder="ค้นหาโครงการ"
           />
         }
       />
@@ -92,15 +92,7 @@ export function ProjectListPage() {
         <table className="table compact">
           <thead>
             <tr>
-              <th>Project ID</th>
-              <th>Project No.</th>
-              <th>Project Name</th>
-              <th>Location</th>
-              <th>Project Manager</th>
-              <th>Construction Manager</th>
-              <th>Status</th>
-              <th>Source</th>
-              <th className="numeric">Inventory Lines</th>
+              <th>รหัสโครงการ</th><th>เลขที่โครงการ</th><th>ชื่อโครงการ</th><th>สถานที่</th><th>ผู้จัดการโครงการ</th><th>ผู้จัดการก่อสร้าง</th><th>สถานะ</th><th>แหล่งข้อมูล</th><th className="numeric">รายการสินค้า</th>
             </tr>
           </thead>
           <tbody>
@@ -138,11 +130,11 @@ export function ProjectListPage() {
                         }}
                         disabled={isReadOnly || savingProjectNo === project.projectNo}
                       >
-                        <option value="Active">Active</option>
-                        <option value="Disactive">Disactive</option>
+                        <option value="Active">ใช้งาน</option>
+                        <option value="Disactive">ปิดใช้งาน</option>
                       </select>
                       {savingProjectNo === project.projectNo ? (
-                        <span className={styles.statusMeta}>Saving...</span>
+                        <span className={styles.statusMeta}>กำลังบันทึก...</span>
                       ) : null}
                     </div>
                   </td>
@@ -154,7 +146,7 @@ export function ProjectListPage() {
                           : `${styles.sourceBadge} ${styles.localBadge}`
                       }
                     >
-                      {project.source === 'master' ? 'MasterData' : 'App Data'}
+                      {project.source === 'master' ? 'ข้อมูลหลัก' : 'ข้อมูลจากระบบ'}
                     </span>
                   </td>
                   <td className="numeric">{inventoryCount}</td>

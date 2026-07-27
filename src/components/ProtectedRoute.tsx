@@ -16,7 +16,7 @@ export function ProtectedRoute({
   requireRoles,
 }: ProtectedRouteProps) {
   const { firebaseUser, userProfile, loading, logout } = useAuth();
-  const { activeRole } = useRole();
+  const { hasAnyRole } = useRole();
   const location = useLocation();
 
   // Handle auto-logout of rejected users
@@ -53,7 +53,7 @@ export function ProtectedRoute({
 
   // 6. requireRoles check
   if (requireRoles && requireRoles.length > 0) {
-    if (!requireRoles.includes(activeRole)) {
+    if (!hasAnyRole(requireRoles)) {
       // Not authorized -> redirect to default route
       return <Navigate to="/" replace />;
     }

@@ -11,11 +11,13 @@ interface StatusBadgeProps {
 }
 
 function formatStatusLabel(status: StatusBadgeProps['status']) {
-  if (status === 'pending') return 'Pending';
-  if (status === 'approved') return 'Approved';
-  if (status === 'rejected') return 'Rejected';
-  if (status === 'cancelled') return 'Cancelled';
-  return status;
+  const labels: Record<string, string> = {
+    pending: 'รอดำเนินการ', approved: 'อนุมัติแล้ว', rejected: 'ไม่อนุมัติ', cancelled: 'ยกเลิกแล้ว',
+    'Pending Dispatch': 'รอจัดส่ง', 'Pending Receipt': 'รอรับเข้า', 'In Transit': 'กำลังขนส่ง',
+    'Received at Site': 'รับเข้าหน้างานแล้ว', 'Waiting Return': 'รอคืน', Borrowed: 'ยืมแล้ว',
+    Overdue: 'เกินกำหนด', Issued: 'เบิกจ่ายแล้ว', Withdrawn: 'เบิกแล้ว', Returned: 'คืนแล้ว', Cancelled: 'ยกเลิกการเบิก', 'Dispatch Cancelled': 'ยกเลิกการจัดส่ง',
+  };
+  return labels[status] ?? status;
 }
 
 export function StatusBadge({ status }: StatusBadgeProps) {
@@ -29,7 +31,7 @@ export function StatusBadge({ status }: StatusBadgeProps) {
         ? styles.transit
         : status === 'Overdue'
           ? styles.overdue
-          : status === 'Issued' || status === 'Withdrawn'
+          : status === 'Issued' || status === 'Withdrawn' || status === 'Cancelled'
             ? styles.neutral
             : styles.received;
 
