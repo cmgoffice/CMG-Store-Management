@@ -1,5 +1,5 @@
-import { CheckCircle2, ClipboardList, History, PackageCheck, X } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { CheckCircle2, ClipboardList, Download, FileUp, History, PackageCheck, Trash2, X } from 'lucide-react';
+import { useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { ITEM_TYPE_OPTIONS } from '../constants/itemTypes';
 import { PageHeader } from '../components/PageHeader';
 import { SearchField } from '../components/SearchField';
@@ -7,6 +7,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { useInventory } from '../context/InventoryContext';
 import { useRole } from '../context/RoleContext';
 import type { DispatchRecord, ReceivingRequest, ReceivingRequestItem, StockItem } from '../types/models';
+import { downloadStockCsvTemplate, parseStockCsv, type StockCsvRow } from '../utils/stockCsv';
 import '../styles/tables.css';
 import styles from './ReceivingPage.module.css';
 
@@ -166,9 +167,11 @@ export function ReceivingPage() {
     dispatchRecords,
     approveReceivingRequest,
     receiveDispatch,
+    importStockItems,
+    deleteReceivingRequest,
     activeProjectNo,
   } = useInventory();
-  const { canApproveReceipt } = useRole();
+  const { canApproveReceipt, hasRole } = useRole();
   const [activeTab, setActiveTab] = useState<ReceivingTab>('receive');
   const [query, setQuery] = useState('');
   const [approvingRequestId, setApprovingRequestId] = useState<string | null>(null);
@@ -181,11 +184,47 @@ export function ReceivingPage() {
   const [receivingIncomingDispatch, setReceivingIncomingDispatch] = useState<DispatchRecord | null>(null);
   const [incomingReceiveQtyDraft, setIncomingReceiveQtyDraft] = useState<Record<string, string>>({});
   const [incomingReceiveError, setIncomingReceiveError] = useState('');
+  const [importRows, setImportRows] = useState<StockCsvRow[]>([]);
+  const [importErrors, setImportErrors] = useState<string[]>([]);
+  const [importWarnings, setImportWarnings] = useState<string[]>([]);
+  const [importFileName, setImportFileName] = useState('');
+  const [isImporting, setIsImporting] = useState(false);
+  const [importMessage, setImportMessage] = useState('');
+  const [deletingHistoryItem, setDeletingHistoryItem] = useState('');
+  const [historyActionError, setHistoryActionError] = useState('');
+  const importInputRef = useRef<HTMLInputElement>(null);
 
   const activeProject = activeProjects.find((project) => project.projectNo === activeProjectNo)
     ?? projects.find((project) => project.projectNo === activeProjectNo);
   const normalizedActiveProjectNo = normalizeProjectNoText(activeProjectNo);
   const normalizedQuery = query.trim().toLowerCase();
+  const importPreviewRows = useMemo(() => {
+    const groupedRows = new Map<string, StockCsvRow>();
+    importRows.forEach((row) => {
+      const itemNo = normalizeMaterialNo(row.itemNo);
+      const existingRow = groupedRows.get(itemNo);
+      if (existingRow) {
+        existingRow.qty += row.qty;
+      } else {
+        groupedRows.set(itemNo, { ...row, itemNo });
+      }
+    });
+
+    return Array.from(groupedRows.values()).map((row) => {
+      const existingItem = stockItems.find((item) => (
+        item.status !== 'In Transit' &&
+        normalizeProjectNoText(item.cmgProjectCode || item.projectId || item.purchasedForProject || item.location) === normalizedActiveProjectNo &&
+        normalizeMaterialNo(item.materialNo || item.itemNo) === row.itemNo
+      ));
+      const existingQty = existingItem?.qty ?? 0;
+      return {
+        ...row,
+        existingQty,
+        finalQty: existingQty + row.qty,
+        existingDescription: existingItem?.itemDescription ?? '',
+      };
+    });
+  }, [importRows, normalizedActiveProjectNo, stockItems]);
 
   const filteredRequests = useMemo(() => {
     return receivingRequests.filter((request) => {
@@ -466,6 +505,69 @@ export function ReceivingPage() {
     }
   };
 
+  const handleImportFileChange = async (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    setImportMessage('');
+    setImportFileName(file.name);
+    try {
+      const result = parseStockCsv(await file.text());
+      setImportRows(result.rows);
+      setImportErrors(result.errors);
+      setImportWarnings(result.warnings);
+    } catch {
+      setImportRows([]);
+      setImportErrors(['ไม่สามารถอ่านไฟล์ CSV นี้ได้']);
+      setImportWarnings([]);
+    }
+  };
+
+  const closeImportModal = () => {
+    if (isImporting) return;
+    setImportRows([]);
+    setImportErrors([]);
+    setImportWarnings([]);
+    setImportFileName('');
+  };
+
+  const handleConfirmImport = async () => {
+    if (!activeProjectNo || importRows.length === 0 || importErrors.length > 0 || isImporting) return;
+    setIsImporting(true);
+    try {
+      await importStockItems({ projectNo: activeProjectNo, items: importRows });
+      const totalQty = importPreviewRows.reduce((sum, row) => sum + row.qty, 0);
+      setImportMessage(`นำเข้า ${importPreviewRows.length.toLocaleString()} รหัสสินค้า รวม ${totalQty.toLocaleString()} ชิ้น ไปยังโครงการ ${activeProjectNo} สำเร็จ`);
+      setImportRows([]);
+      setImportErrors([]);
+      setImportWarnings([]);
+      setImportFileName('');
+    } catch (error) {
+      setImportErrors([error instanceof Error ? error.message : 'นำเข้าสินค้าไม่สำเร็จ กรุณาลองใหม่']);
+    } finally {
+      setIsImporting(false);
+    }
+  };
+
+  const handleDeleteHistoryRequest = async (request: ReceivingRequest) => {
+    const totalQty = request.items.reduce((sum, item) => sum + item.receivedQty, 0);
+    const confirmed = window.confirm(
+      `ยืนยันลบ Request ID ${request.id}?\n\nระบบจะลบทั้ง ${request.items.length.toLocaleString()} รายการ รวม ${totalQty.toLocaleString()} ชิ้นออกจากสต็อก การดำเนินการนี้ย้อนกลับไม่ได้`
+    );
+    if (!confirmed) return;
+
+    setDeletingHistoryItem(request.id);
+    setHistoryActionError('');
+    try {
+      await deleteReceivingRequest(request.id);
+    } catch (error) {
+      setHistoryActionError(error instanceof Error ? error.message : 'ลบรายการรับเข้าไม่สำเร็จ กรุณาลองใหม่');
+    } finally {
+      setDeletingHistoryItem('');
+    }
+  };
+
   return (
     <div>
       <PageHeader
@@ -477,17 +579,42 @@ export function ReceivingPage() {
             : 'Review incoming receiving requests from the external PR, PO system.'
         }
         actions={(
-          <SearchField
-            value={query}
-            onChange={setQuery}
-            placeholder={
-              activeTab === 'log'
-                ? 'Search receive log, PR, CMG project code'
-                : 'Search receive no, PR, vendor, CMG project code'
-            }
-          />
+          <>
+            <input
+              ref={importInputRef}
+              className={styles.hiddenFileInput}
+              type="file"
+              accept=".csv,text/csv"
+              onChange={handleImportFileChange}
+            />
+            <button type="button" className={styles.headerButton} onClick={downloadStockCsvTemplate}>
+              <Download size={16} />
+              Download template
+            </button>
+            <button
+              type="button"
+              className={`${styles.headerButton} ${styles.importButton}`}
+              disabled={!activeProjectNo || !canApproveReceipt}
+              title={!activeProjectNo ? 'กรุณาเลือกโครงการก่อนนำเข้า' : undefined}
+              onClick={() => importInputRef.current?.click()}
+            >
+              <FileUp size={16} />
+              Import CSV
+            </button>
+            <SearchField
+              value={query}
+              onChange={setQuery}
+              placeholder={
+                activeTab === 'log'
+                  ? 'Search receive log, PR, CMG project code'
+                  : 'Search receive no, PR, vendor, CMG project code'
+              }
+            />
+          </>
         )}
       />
+
+      {importMessage ? <div className={styles.successNotice}>{importMessage}</div> : null}
 
       <div className={styles.tabs}>
         <button
@@ -749,7 +876,10 @@ export function ReceivingPage() {
 
           {approvedRequestGroups.length === 0 ? (
             <div className={styles.empty}>ไม่พบประวัติการรับสินค้าตามเงื่อนไข</div>
-          ) : approvedRequestGroups.map((group) => (
+          ) : (
+            <>
+              {historyActionError ? <div className={styles.historyError}>{historyActionError}</div> : null}
+              {approvedRequestGroups.map((group) => (
             <section key={group.projectCode} className={styles.projectGroup}>
               <div className={styles.projectGroupHeader}>
                 <div>
@@ -766,6 +896,7 @@ export function ReceivingPage() {
                       <th>Request ID</th>
                       <th>PR</th>
                       <th>Description</th>
+                      <th className="numeric">จำนวนรับเข้า</th>
                       <th>Receive Name</th>
                       <th>Approved By</th>
                       <th>Approved At</th>
@@ -783,7 +914,21 @@ export function ReceivingPage() {
                               <>
                                 <td rowSpan={request.items.length}>{requestIndex + 1}</td>
                                 <td rowSpan={request.items.length}>
-                                  <span className={styles.receiveCode}>{request.id}</span>
+                                  <div className={styles.requestIdAction}>
+                                    <span className={styles.receiveCode}>{request.id}</span>
+                                    {hasRole('MasterAdmin') ? (
+                                      <button
+                                        type="button"
+                                        className={styles.deleteStockButton}
+                                        disabled={Boolean(deletingHistoryItem)}
+                                        title={`ลบ Request ID ${request.id} และสินค้าทุกรายการใน Request`}
+                                        aria-label={`ลบ Request ID ${request.id}`}
+                                        onClick={() => handleDeleteHistoryRequest(request)}
+                                      >
+                                        <Trash2 size={15} />
+                                      </button>
+                                    ) : null}
+                                  </div>
                                 </td>
                                 <td rowSpan={request.items.length} className={styles.prCell}>{request.prNo || '-'}</td>
                               </>
@@ -791,6 +936,7 @@ export function ReceivingPage() {
                             <td className={`${styles.descriptionCell} ${styles.historyDescriptionCell}`}>
                               {item.itemDescription?.trim() || '-'}
                             </td>
+                            <td className="numeric">{item.receivedQty.toLocaleString()}</td>
                             {itemIndex === 0 ? (
                               <>
                                 <td rowSpan={request.items.length}>{request.receiveName || '-'}</td>
@@ -818,7 +964,9 @@ export function ReceivingPage() {
                 </table>
               </div>
             </section>
-          ))}
+              ))}
+            </>
+          )}
         </section>
       )}
 
@@ -1159,6 +1307,86 @@ export function ReceivingPage() {
               </button>
             </div>
             {incomingReceiveError ? <div className={styles.footerError}>{incomingReceiveError}</div> : null}
+          </div>
+        </div>
+      ) : null}
+
+      {importFileName ? (
+        <div className={styles.modalOverlay} role="presentation" onMouseDown={closeImportModal}>
+          <div className={`${styles.modal} ${styles.importModal}`} role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
+            <div className={styles.modalHeader}>
+              <div>
+                <h3>นำเข้าสินค้าจาก CSV</h3>
+                <p>{importFileName} → โครงการ {activeProject?.projectNo ?? activeProjectNo}</p>
+              </div>
+              <button type="button" className={styles.iconButton} onClick={closeImportModal} disabled={isImporting} aria-label="ปิด">
+                <X size={18} />
+              </button>
+            </div>
+            <div className={styles.modalBody}>
+              <div className={styles.importSummary}>
+                <strong>{importPreviewRows.length.toLocaleString()} รหัสสินค้า</strong>
+                <span>เพิ่มรวม {importPreviewRows.reduce((sum, row) => sum + row.qty, 0).toLocaleString()} ชิ้น</span>
+                <span>จับคู่รายการเดิมด้วยรหัสสินค้าเท่านั้น</span>
+              </div>
+              {importErrors.length > 0 ? (
+                <div className={styles.importErrors}>
+                  <strong>กรุณาแก้ไขไฟล์ก่อนนำเข้า</strong>
+                  <ul>{importErrors.slice(0, 20).map((error) => <li key={error}>{error}</li>)}</ul>
+                  {importErrors.length > 20 ? <p>และอีก {importErrors.length - 20} ข้อผิดพลาด</p> : null}
+                </div>
+              ) : null}
+              {importWarnings.length > 0 ? (
+                <div className={styles.importWarnings}>
+                  <strong>คำเตือน — รายการเหล่านี้จะถูกข้าม</strong>
+                  <ul>{importWarnings.slice(0, 20).map((warning) => <li key={warning}>{warning}</li>)}</ul>
+                  {importWarnings.length > 20 ? <p>และอีก {importWarnings.length - 20} คำเตือน</p> : null}
+                </div>
+              ) : null}
+              {importPreviewRows.length > 0 ? (
+                <div className="table-wrap">
+                  <table className={styles.importPreviewTable}>
+                    <thead><tr><th>รหัสสินค้า</th><th>ชื่อสินค้าในระบบ/CSV</th><th className="numeric">ยอดเดิม</th><th className="numeric">เพิ่ม</th><th className="numeric">ยอดใหม่</th></tr></thead>
+                    <tbody>
+                      {importPreviewRows.slice(0, 100).map((row) => (
+                        <tr key={row.itemNo}>
+                          <td>{row.itemNo}{row.itemType ? <small className={styles.itemTypeHint}>{row.itemType}</small> : null}</td>
+                          <td>
+                            {row.existingDescription || row.itemDescription}
+                            {row.existingDescription && row.existingDescription !== row.itemDescription ? (
+                              <small className={styles.nameMismatch}>ชื่อใน CSV: {row.itemDescription} (ระบบจะใช้ชื่อเดิม)</small>
+                            ) : null}
+                          </td>
+                          <td className="numeric">{row.existingQty.toLocaleString()}</td>
+                          <td className={`numeric ${styles.addQty}`}>+{row.qty.toLocaleString()}</td>
+                          <td className={`numeric ${styles.finalQty}`}>{row.finalQty.toLocaleString()}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {importPreviewRows.length > 100 ? <p className={styles.previewNote}>แสดงตัวอย่าง 100 รายการแรก</p> : null}
+                </div>
+              ) : null}
+              {importPreviewRows.length > 0 && importErrors.length === 0 ? (
+                <div className={styles.confirmNotice}>
+                  ยืนยันเพิ่ม <strong>{importPreviewRows.length.toLocaleString()} รหัสสินค้า</strong>{' '}
+                  จำนวนรวม <strong>{importPreviewRows.reduce((sum, row) => sum + row.qty, 0).toLocaleString()} ชิ้น</strong>{' '}
+                  ไปยังโครงการ <strong>{activeProject?.projectNo ?? activeProjectNo}</strong> หรือไม่?
+                </div>
+              ) : null}
+            </div>
+            <div className={styles.modalFooter}>
+              <button type="button" className={styles.ghostButton} onClick={closeImportModal} disabled={isImporting}>ยกเลิก</button>
+              <button
+                type="button"
+                className={styles.primaryButton}
+                disabled={isImporting || importRows.length === 0 || importErrors.length > 0 || !activeProjectNo}
+                onClick={handleConfirmImport}
+              >
+                <FileUp size={16} />
+                {isImporting ? 'กำลังนำเข้า...' : `ยืนยันเพิ่ม ${importPreviewRows.length.toLocaleString()} รายการ`}
+              </button>
+            </div>
           </div>
         </div>
       ) : null}

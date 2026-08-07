@@ -66,6 +66,19 @@ interface ApproveReceivingRequestLineInput {
   itemTypeGroup?: 'Type 1' | 'Type 2';
 }
 
+interface ImportStockLineInput {
+  itemNo: string;
+  itemDescription: string;
+  qty: number;
+  itemType?: string;
+  itemTypeGroup?: 'Type 1' | 'Type 2';
+}
+
+interface ImportStockInput {
+  projectNo: string;
+  items: ImportStockLineInput[];
+}
+
 interface CreateWithdrawLineInput {
   receiveNo: string;
   qty: number;
@@ -100,6 +113,8 @@ interface InventoryContextValue {
   approveReceivingRequest: (requestId: string, receivedItems?: ApproveReceivingRequestLineInput[]) => Promise<void>;
   receiveDispatch: (dispatchId: string, receivedItems?: ReceiveDispatchLineInput[]) => Promise<void>;
   receiveNewItem: (item: StockItem) => Promise<void>;
+  importStockItems: (input: ImportStockInput) => Promise<void>;
+  deleteReceivingRequest: (requestId: string) => Promise<void>;
   receivePrPoPayload: (payload: PrPoReceivePayload) => Promise<PrPoReceiveResponse>;
   activeProjectNo: string;
   setActiveProjectNo: (projectNo: string) => void;
@@ -251,6 +266,12 @@ function createReceivingStockReceiveNo(request: ReceivingRequest, item: Receivin
   }
 
   return `${request.receiveNo}-${String(index + 1).padStart(2, '0')}`;
+}
+
+function createImportNumber(projectNo: string) {
+  const timestamp = new Date().toISOString().replace(/\D/g, '').slice(0, 17);
+  const suffix = Math.random().toString(36).slice(2, 7).toUpperCase();
+  return `${getProjectShortNo(projectNo)}-IMP-${timestamp}-${suffix}`;
 }
 
 function extractProjectNo(projectLabel: string) {
@@ -2089,6 +2110,277 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     }));
   }, [userProfile]);
 
+  const importStockItems = useCallback(async ({ projectNo, items: importedItems }: ImportStockInput) => {
+    const normalizedProjectNo = normalizeProjectNoText(projectNo);
+    if (!normalizedProjectNo || importedItems.length === 0) {
+      throw new Error('กรุณาเลือกโครงการและระบุสินค้าอย่างน้อย 1 รายการ');
+    }
+
+    const project = visibleProjects.find(
+      (entry) => normalizeProjectNoText(entry.projectNo) === normalizedProjectNo
+    );
+    if (!project) {
+      throw new Error(`ไม่พบโครงการ ${projectNo}`);
+    }
+
+    const importedAt = new Date().toISOString();
+    const importNo = createImportNumber(normalizedProjectNo);
+    const receiver = createReceivedBySnapshot(userProfile, 'CSV Import');
+    const groupedItems = Array.from(importedItems.reduce((groups, item) => {
+      const materialNo = normalizeMaterialNo(item.itemNo);
+      const existing = groups.get(materialNo);
+      if (existing) {
+        existing.qty += item.qty;
+      } else {
+        groups.set(materialNo, { ...item, itemNo: materialNo });
+      }
+      return groups;
+    }, new Map<string, ImportStockLineInput>()).values());
+    const assignments = groupedItems.map((item) => {
+      const existingStockItem = findStockItemByIdentity(
+        visibleStockItems,
+        normalizedProjectNo,
+        item.itemNo,
+      );
+      return {
+        item,
+        stockItemId: existingStockItem
+          ? getStockItemId(existingStockItem)
+          : createStockIdentityDocumentId(normalizedProjectNo, item.itemNo),
+      };
+    });
+
+    if (assignments.some(({ stockItemId }) => !stockItemId)) {
+      throw new Error('พบรหัสสินค้าที่ไม่สามารถบันทึกได้');
+    }
+
+    const chunkSize = 350;
+    const assignmentChunks = Array.from(
+      { length: Math.ceil(assignments.length / chunkSize) },
+      (_, index) => assignments.slice(index * chunkSize, (index + 1) * chunkSize),
+    );
+
+    for (let chunkIndex = 0; chunkIndex < assignmentChunks.length; chunkIndex += 1) {
+      const chunkAssignments = assignmentChunks[chunkIndex];
+      const requestId = assignmentChunks.length === 1
+        ? importNo
+        : `${importNo}-${String(chunkIndex + 1).padStart(2, '0')}`;
+      const requestRef = doc(db, APP_NAME, 'root', 'receivingRequests', requestId);
+      await runTransaction(db, async (transaction) => {
+        const snapshots = await Promise.all(chunkAssignments.map(({ stockItemId }) => (
+          transaction.get(doc(db, APP_NAME, 'root', 'stockItems', stockItemId))
+        )));
+
+        chunkAssignments.forEach(({ item, stockItemId }, index) => {
+        const snapshot = snapshots[index];
+        const existing = snapshot.exists()
+          ? normalizeStockItem(snapshot.data(), snapshot.id)
+          : undefined;
+        transaction.set(doc(db, APP_NAME, 'root', 'stockItems', stockItemId), stripUndefined({
+          stockItemId,
+          receiveNo: existing?.receiveNo || requestId,
+          sourceReceiveNo: requestId,
+          poNo: existing?.poNo || '',
+          prNo: existing?.prNo || '',
+          poType: existing?.poType || 'CSV Import',
+          itemNo: item.itemNo,
+          itemDescription: existing?.itemDescription || item.itemDescription,
+          materialNo: item.itemNo,
+          itemType: item.itemType || existing?.itemType,
+          itemTypeGroup: item.itemTypeGroup || existing?.itemTypeGroup,
+          amount: existing?.amount ?? 0,
+          qty: (existing?.qty ?? 0) + item.qty,
+          vendorName: existing?.vendorName || 'CSV Import',
+          location: createProjectStoreLocation(normalizedProjectNo),
+          purchasedForProject: createProjectLabel(normalizedProjectNo),
+          projectId: project.projectId || normalizedProjectNo,
+          cmgProjectCode: normalizedProjectNo,
+          receiveName: receiver.receivedByName,
+          receiveDate: importedAt,
+          receivedByUid: receiver.receivedByUid,
+          receivedByName: receiver.receivedByName,
+          receivedByEmail: receiver.receivedByEmail,
+          lastReceiveEventId: requestId,
+          lastReceivedQty: item.qty,
+          lastReceivedAt: importedAt,
+          status: 'Received at Site' as const,
+        }), { merge: true });
+        });
+
+        transaction.set(requestRef, stripUndefined({
+        id: requestId,
+        receiveNo: requestId,
+        poNo: '',
+        prNo: '',
+        poType: 'CSV Import',
+        projectId: project.projectId || normalizedProjectNo,
+        cmgProjectCode: normalizedProjectNo,
+        projectNo: normalizedProjectNo,
+        projectName: project.projectName,
+        location: createProjectStoreLocation(normalizedProjectNo),
+        vendorName: 'CSV Import',
+        receiveName: receiver.receivedByName,
+        receiveDate: importedAt,
+        receivedByUid: receiver.receivedByUid,
+        receivedByName: receiver.receivedByName,
+        sourceApp: 'CSV Import',
+        requestStatus: 'approved',
+        requestedAt: importedAt,
+        approvedAt: importedAt,
+        approvedByUid: receiver.receivedByUid,
+        approvedByName: receiver.receivedByName,
+        approvedByEmail: receiver.receivedByEmail,
+        items: chunkAssignments.map(({ item, stockItemId }) => ({
+          itemNo: item.itemNo,
+          materialNo: item.itemNo,
+          itemDescription: item.itemDescription,
+          receivedQty: item.qty,
+          amount: 0,
+          itemType: item.itemType,
+          itemTypeGroup: item.itemTypeGroup,
+          stockReceiveNo: stockItemId,
+        })),
+        stockReceiveNos: chunkAssignments.map(({ stockItemId }) => stockItemId),
+        totalQty: chunkAssignments.reduce<number>((sum, { item }) => sum + item.qty, 0),
+        totalAmount: 0,
+        }));
+      });
+    }
+  }, [userProfile, visibleProjects, visibleStockItems]);
+
+  const deleteReceivingRequest = useCallback(async (requestId: string) => {
+    if (!userProfile?.role.includes('MasterAdmin')) {
+      throw new Error('เฉพาะ MasterAdmin เท่านั้นที่สามารถลบรายการรับเข้าได้');
+    }
+
+    const target = receivingRequestList.find((request) => request.id === requestId);
+    if (!target || target.requestStatus !== 'approved' || !target.items.length) {
+      throw new Error('ไม่พบรายการรับเข้าที่ต้องการลบ กรุณารีเฟรชแล้วลองใหม่');
+    }
+
+    const requestRef = doc(db, APP_NAME, 'root', 'receivingRequests', requestId);
+    const deleteLogRef = doc(collection(db, APP_NAME, 'root', 'logdeletes'));
+    const deletedAt = new Date().toISOString();
+    const deletedBy = createReceivedBySnapshot(userProfile, 'MasterAdmin');
+
+    await runTransaction(db, async (transaction) => {
+      const requestSnapshot = await transaction.get(requestRef);
+
+      if (!requestSnapshot.exists()) {
+        throw new Error('ไม่พบประวัติการรับเข้านี้แล้ว');
+      }
+
+      const requestData = requestSnapshot.data() as DocumentData;
+      if (normalizeReceivingRequestStatus(requestData.requestStatus ?? requestData.status) !== 'approved') {
+        throw new Error('ลบได้เฉพาะรายการรับเข้าที่อนุมัติแล้ว');
+      }
+
+      const rawItems = parseReceivingItems(requestData.items);
+      const requestStockReceiveNos = normalizeStringArray(requestData.stockReceiveNos);
+      const receivingItems = rawItems
+        .map((rawItem, rawIndex) => {
+          const rawItemData = rawItem && typeof rawItem === 'object'
+            ? rawItem as DocumentData
+            : ({} as DocumentData);
+          return {
+            item: normalizeReceivingRequestItem(rawItemData, rawIndex),
+          };
+        })
+        .filter(({ item }) => item.receivedQty > 0)
+        .map(({ item }, itemIndex) => ({
+          item,
+          stockItemId: item.stockReceiveNo || requestStockReceiveNos[itemIndex],
+        }));
+
+      if (!receivingItems.length || receivingItems.some(({ stockItemId }) => !stockItemId)) {
+        throw new Error('พบรายการที่ไม่มี Stock Receive No. จึงไม่สามารถลบ Request นี้ได้');
+      }
+
+      const deductions = receivingItems.reduce((groups, { item, stockItemId }) => {
+        const current = groups.get(stockItemId) ?? { qty: 0, amount: 0 };
+        current.qty += item.receivedQty;
+        current.amount = roundAmount(current.amount + item.amount);
+        groups.set(stockItemId, current);
+        return groups;
+      }, new Map<string, { qty: number; amount: number }>());
+      const stockEntries = Array.from(deductions.entries());
+      const stockRefs = stockEntries.map(([stockItemId]) => (
+        doc(db, APP_NAME, 'root', 'stockItems', stockItemId)
+      ));
+      const stockSnapshots = await Promise.all(stockRefs.map((stockRef) => transaction.get(stockRef)));
+
+      const stockChanges = stockEntries.map(([stockItemId, deduction], index) => {
+        const stockSnapshot = stockSnapshots[index];
+        if (!stockSnapshot.exists()) {
+          throw new Error(`ไม่พบสินค้า ${stockItemId} ในสต็อก จึงไม่สามารถลบ Request นี้ได้`);
+        }
+
+        const stockItem = normalizeStockItem(stockSnapshot.data(), stockSnapshot.id);
+        if (stockItem.qty < deduction.qty) {
+          throw new Error(
+            `ไม่สามารถลบได้ เนื่องจาก ${stockItemId} คงเหลือ ${stockItem.qty.toLocaleString()} ชิ้น แต่ Request นี้รับเข้า ${deduction.qty.toLocaleString()} ชิ้น`
+          );
+        }
+
+        const remainingQty = stockItem.qty - deduction.qty;
+        const remainingAmount = Math.max(0, roundAmount(stockItem.amount - deduction.amount));
+        const beforeData = stockSnapshot.data() as DocumentData;
+        const afterData = remainingQty === 0
+          ? null
+          : {
+              ...beforeData,
+              qty: remainingQty,
+              amount: remainingAmount,
+              ...(stockItem.lastReceiveEventId === requestId
+                ? { lastReceiveEventId: '', lastReceivedQty: 0, lastReceivedAt: '' }
+                : {}),
+            };
+
+        return {
+          stockItemId,
+          deductedQty: deduction.qty,
+          deductedAmount: deduction.amount,
+          before: beforeData,
+          after: afterData,
+          stockDocumentDeleted: remainingQty === 0,
+        };
+      });
+
+      stockChanges.forEach((change, index) => {
+        if (change.stockDocumentDeleted) {
+          transaction.delete(stockRefs[index]);
+        } else {
+          transaction.update(stockRefs[index], {
+            qty: change.after?.qty,
+            amount: change.after?.amount,
+            ...(change.before.lastReceiveEventId === requestId
+              ? { lastReceiveEventId: '', lastReceivedQty: 0, lastReceivedAt: '' }
+              : {}),
+          });
+        }
+      });
+
+      transaction.set(deleteLogRef, stripUndefined({
+        id: deleteLogRef.id,
+        action: 'delete_receiving_request',
+        entityType: 'receivingRequest',
+        requestId,
+        deletedAt,
+        deletedByUid: deletedBy.receivedByUid,
+        deletedByName: deletedBy.receivedByName,
+        deletedByEmail: deletedBy.receivedByEmail,
+        recoverable: true,
+        sourcePath: `${APP_NAME}/root/receivingRequests/${requestId}`,
+        originalRequest: {
+          documentId: requestSnapshot.id,
+          data: requestData,
+        },
+        stockChanges,
+      }));
+      transaction.delete(requestRef);
+    });
+  }, [receivingRequestList, userProfile]);
+
   const receivePrPoPayload = useCallback(async (payload: PrPoReceivePayload) => {
     return processPrPoReceivePayload(payload);
   }, []);
@@ -2130,6 +2422,8 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       approveReceivingRequest,
       receiveDispatch,
       receiveNewItem,
+      importStockItems,
+      deleteReceivingRequest,
       receivePrPoPayload,
       activeProjectNo,
       setActiveProjectNo,
@@ -2144,6 +2438,8 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       cancelWithdraw,
       receiveDispatch,
       receiveNewItem,
+      importStockItems,
+      deleteReceivingRequest,
       receivePrPoPayload,
       returnWithdraw,
       updateProjectStatus,

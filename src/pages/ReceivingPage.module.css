@@ -3,6 +3,49 @@
   font: inherit;
 }
 
+.hiddenFileInput {
+  display: none;
+}
+
+.headerButton {
+  display: inline-flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid #b8c9e3;
+  border-radius: 8px;
+  background: #fff;
+  color: #23436c;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 0 12px;
+  white-space: nowrap;
+}
+
+.importButton {
+  border-color: #0b5cad;
+  background: #0b5cad;
+  color: #fff;
+}
+
+.headerButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.successNotice {
+  margin-bottom: 10px;
+  border: 1px solid #86efac;
+  border-radius: 8px;
+  background: #f0fdf4;
+  color: #166534;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 10px 12px;
+}
+
 .tabs {
   display: inline-flex;
   gap: 8px;
@@ -213,7 +256,7 @@
 }
 
 .historyTable {
-  min-width: 1260px;
+  min-width: 1340px;
 }
 
 .historyTable th,
@@ -242,24 +285,29 @@
 }
 
 .historyTable th:nth-child(5),
-.historyTable td:nth-child(5),
-.historyTable th:nth-child(6),
-.historyTable td:nth-child(6) {
-  width: 130px;
+.historyTable td:nth-child(5) {
+  width: 90px;
 }
 
+.historyTable th:nth-child(6),
+.historyTable td:nth-child(6),
 .historyTable th:nth-child(7),
 .historyTable td:nth-child(7) {
-  width: 118px;
+  width: 130px;
 }
 
 .historyTable th:nth-child(8),
 .historyTable td:nth-child(8) {
-  width: 220px;
+  width: 118px;
 }
 
 .historyTable th:nth-child(9),
 .historyTable td:nth-child(9) {
+  width: 220px;
+}
+
+.historyTable th:nth-child(10),
+.historyTable td:nth-child(10) {
   width: 86px;
 }
 
@@ -278,6 +326,48 @@
 
 .dispatchTable {
   min-width: 1320px;
+}
+
+.requestIdAction {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
+.deleteStockButton {
+  display: inline-flex;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #fecaca;
+  border-radius: 7px;
+  background: #fff;
+  color: #dc2626;
+}
+
+.deleteStockButton:hover:not(:disabled) {
+  border-color: #dc2626;
+  background: #fef2f2;
+}
+
+.deleteStockButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.historyError {
+  margin-bottom: 10px;
+  border: 1px solid #fecaca;
+  border-radius: 8px;
+  background: #fef2f2;
+  color: #991b1b;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 10px 12px;
 }
 
 .dispatchTable th,
@@ -538,6 +628,119 @@
 
 .receiveModal {
   width: min(920px, 100%);
+}
+
+.importModal {
+  width: min(1000px, 100%);
+}
+
+.importSummary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  padding: 12px 14px;
+  border: 1px solid #bfdbfe;
+  border-radius: 12px;
+  background: #eff6ff;
+  color: #1e3a5f;
+  font-size: 12px;
+}
+
+.importErrors {
+  padding: 12px 14px;
+  border: 1px solid #fecaca;
+  border-radius: 12px;
+  background: #fef2f2;
+  color: #991b1b;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.importErrors ul,
+.importErrors p {
+  margin: 6px 0 0;
+}
+
+.importWarnings {
+  padding: 12px 14px;
+  border: 1px solid #fde68a;
+  border-radius: 12px;
+  background: #fffbeb;
+  color: #92400e;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.importWarnings ul,
+.importWarnings p {
+  margin: 6px 0 0;
+}
+
+.importPreviewTable {
+  width: 100%;
+  min-width: 720px;
+}
+
+.importPreviewTable th:nth-child(1),
+.importPreviewTable td:nth-child(1) {
+  width: 150px;
+}
+
+.importPreviewTable th:nth-child(2),
+.importPreviewTable td:nth-child(2) {
+  width: auto;
+}
+
+.importPreviewTable th:nth-child(3),
+.importPreviewTable td:nth-child(3) {
+  width: 90px;
+}
+
+.importPreviewTable th:last-child,
+.importPreviewTable td:last-child {
+  width: 90px;
+}
+
+.itemTypeHint,
+.nameMismatch {
+  display: block;
+  margin-top: 3px;
+  color: var(--color-text-muted);
+  font-size: 10px;
+  line-height: 14px;
+}
+
+.nameMismatch {
+  color: #9a3412;
+}
+
+.addQty {
+  color: #0b5cad;
+  font-weight: 800;
+}
+
+.finalQty {
+  color: #166534;
+  font-weight: 800;
+}
+
+.confirmNotice {
+  padding: 14px 16px;
+  border: 1px solid #86efac;
+  border-radius: 12px;
+  background: #f0fdf4;
+  color: #166534;
+  font-size: 13px;
+  line-height: 20px;
+  text-align: center;
+}
+
+.previewNote {
+  margin: 8px 0 0;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  text-align: right;
 }
 
 .modalHeader,
