@@ -77,6 +77,9 @@ function extractProjectNoFromLabel(value: string) {
 }
 
 function getStockItemProjectNo(item: StockItem) {
+  if (item.status === 'Borrowed' && item.borrowerProjectNo) {
+    return normalizeProjectNo(item.borrowerProjectNo);
+  }
   return (
     normalizeProjectNo(item.cmgProjectCode) ||
     extractProjectNoFromLabel(item.purchasedForProject) ||

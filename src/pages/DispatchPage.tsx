@@ -78,6 +78,7 @@ export function DispatchPage() {
     activeProjects,
     stockItems,
     dispatchRecords,
+    projectBorrowRequests,
     createDispatch,
     cancelDispatch,
     activeProjectNo,
@@ -107,6 +108,12 @@ export function DispatchPage() {
   const destinationProjects = useMemo(
     () => activeProjects.filter((project) => project.projectNo !== activeProjectNo),
     [activeProjectNo, activeProjects]
+  );
+  const approvedBorrowRequests = useMemo(
+    () => projectBorrowRequests.filter((request) =>
+      request.status === 'Pending Dispatch' && request.lenderProjectNo === normalizeProjectNo(activeProjectNo)
+    ),
+    [activeProjectNo, projectBorrowRequests]
   );
 
   useEffect(() => {
@@ -414,6 +421,12 @@ export function DispatchPage() {
       {!canDispatch ? (
         <div className={styles.notice}>
           Dispatch creation is available for Store Center only. Destination projects receive moved items from Receiving, tab ย้ายโครงการ.
+        </div>
+      ) : null}
+
+      {canDispatch && approvedBorrowRequests.length > 0 ? (
+        <div className={styles.notice}>
+          มีคำขอยืมที่อนุมัติแล้ว {approvedBorrowRequests.length} รายการ — กรุณาเลือก EQM และโครงการปลายทางในหน้าจัดส่งนี้เพื่อทำ Dispatch ตามปกติ
         </div>
       ) : null}
 

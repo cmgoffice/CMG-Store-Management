@@ -38,11 +38,67 @@ export type WithdrawRecordStatus =
   | 'Returned'
   | 'Cancelled';
 
+export type ProjectBorrowStatus =
+  | 'Pending Approval'
+  | 'Pending Dispatch'
+  | 'In Transit'
+  | 'Borrowed'
+  | 'Rejected'
+  | 'Return Requested'
+  | 'Returned'
+  | 'Cancelled';
+
 export type ReceivingRequestStatus =
   | 'pending'
   | 'approved'
   | 'rejected'
   | 'cancelled';
+
+export type CancellationEntityType =
+  | 'projectStock'
+  | 'receiving'
+  | 'dispatch'
+  | 'withdraw'
+  | 'projectBorrow';
+
+export type CancellationRequestStatus =
+  | 'Pending Approval'
+  | 'Approved'
+  | 'Rejected';
+
+export interface CancellationRequest {
+  id: string;
+  cancellationNo: string;
+  entityType: CancellationEntityType;
+  entityId: string;
+  referenceNo: string;
+  projectNos: string[];
+  projectLabel?: string;
+  reason: string;
+  cancelQty?: number;
+  status: CancellationRequestStatus;
+  approvalStep: 0 | 1 | 2;
+  requestedByUid: string;
+  requestedByName: string;
+  requestedByEmail: string;
+  requestedAt: string;
+  firstApprovedAt?: string;
+  firstApprovedByUid?: string;
+  firstApprovedByName?: string;
+  firstApprovedByEmail?: string;
+  secondApprovedAt?: string;
+  secondApprovedByUid?: string;
+  secondApprovedByName?: string;
+  secondApprovedByEmail?: string;
+  rejectedAt?: string;
+  rejectedByUid?: string;
+  rejectedByName?: string;
+  rejectedReason?: string;
+  completedAt?: string;
+  completedByUid?: string;
+  completedByName?: string;
+  completedByEmail?: string;
+}
 
 export interface StockItem {
   stockItemId?: string;
@@ -84,11 +140,15 @@ export interface StockItem {
   lastReceiveEventId?: string;
   lastReceivedQty?: number;
   lastReceivedAt?: string;
+  projectBorrowRequestNo?: string;
+  borrowedFromProjectNo?: string;
+  borrowerProjectNo?: string;
 }
 
 export interface ReceivingRequestItem {
   itemNo: string;
   itemDescription: string;
+  prNo?: string;
   orderedQty?: number;
   receivedQty: number;
   unit?: string;
@@ -134,6 +194,11 @@ export interface ReceivingRequest {
   approvedByName?: string;
   approvedByEmail?: string;
   stockReceiveNos?: string[];
+  cancelledAt?: string;
+  cancelledByUid?: string;
+  cancelledByName?: string;
+  cancelledByEmail?: string;
+  cancellationReason?: string;
 }
 
 export interface DispatchItemSnapshot {
@@ -180,6 +245,7 @@ export interface DispatchRecord {
   cancelledByUid?: string;
   cancelledByName?: string;
   cancelledByEmail?: string;
+  cancellationReason?: string;
 }
 
 export interface WithdrawItemSnapshot {
@@ -223,10 +289,74 @@ export interface WithdrawRecord {
   cancelledByUid?: string;
   cancelledByName?: string;
   cancelledByEmail?: string;
+  cancellationReason?: string;
   itemReceiveNos: string[];
   items: WithdrawItemSnapshot[];
   totalQty: number;
   photoUrls: string[];
+  createdAt: string;
+}
+
+export interface ProjectBorrowItemSnapshot {
+  sourceStockItemId: string;
+  dispatchStockItemId?: string;
+  borrowedStockItemId?: string;
+  receiveNo: string;
+  itemNo: string;
+  itemDescription: string;
+  materialNo?: string;
+  itemType?: string;
+  unit?: string;
+  qty: number;
+  receivedQty?: number;
+  amount: number;
+  vendorName: string;
+  sourceLocation: string;
+  sourceStatus: StockStatus;
+}
+
+export interface ProjectBorrowRequest {
+  id: string;
+  requestNo: string;
+  borrowerProjectNo: string;
+  borrowerProjectName: string;
+  lenderProjectNo: string;
+  lenderProjectName: string;
+  status: ProjectBorrowStatus;
+  approvalStep: 0 | 1 | 2;
+  approvedAt?: string;
+  approvedByUid?: string;
+  approvedByName?: string;
+  firstApprovedAt?: string;
+  firstApprovedByUid?: string;
+  firstApprovedByName?: string;
+  secondApprovedAt?: string;
+  secondApprovedByUid?: string;
+  secondApprovedByName?: string;
+  rejectedAt?: string;
+  rejectedByUid?: string;
+  rejectedByName?: string;
+  returnRequestedAt?: string;
+  returnRequestedByUid?: string;
+  returnRequestedByName?: string;
+  returnedAt?: string;
+  returnedByUid?: string;
+  returnedByName?: string;
+  dispatchNo?: string;
+  dispatchedAt?: string;
+  receivedAt?: string;
+  cancelledAt?: string;
+  cancelledByUid?: string;
+  cancelledByName?: string;
+  cancelledByEmail?: string;
+  cancellationReason?: string;
+  requestedByUid: string;
+  requestedByName: string;
+  purpose: string;
+  dueDate?: string;
+  items: ProjectBorrowItemSnapshot[];
+  itemReceiveNos: string[];
+  totalQty: number;
   createdAt: string;
 }
 

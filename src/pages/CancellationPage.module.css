@@ -1,0 +1,102 @@
+.page { display: flex; flex-direction: column; gap: 20px; padding: 28px 32px 44px; min-height: 100%; background: #f7f8fc; }
+.createButton { display: inline-flex; align-items: center; gap: 7px; padding: 10px 14px; border: 0; border-radius: 10px; background: #6b48d7; color: #fff; cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; }
+.createButton:hover { background: #5432bd; }
+.createButton:disabled { cursor: not-allowed; opacity: .55; }
+.contextBar { display: flex; align-items: center; gap: 9px; padding: 12px 15px; border: 1px solid #e9e5f7; border-radius: 12px; background: #fff; color: #5d566d; font-size: 12px; }
+.contextBar strong { color: #4f32bc; }
+.contextHint { margin-left: auto; color: #918b9e; font-size: 11px; }
+.summaryIconText { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 10px; background: #eee9ff; color: #6849d3; font-size: 10px; font-weight: 800; }
+.workflowBanner { display: flex; align-items: center; gap: 13px; padding: 16px 18px; border: 1px solid #ddd6fe; border-radius: 16px; background: linear-gradient(135deg, #f4f0ff, #fff); color: #5b3cc4; }
+.workflowBanner div { display: flex; flex-direction: column; gap: 3px; }
+.workflowBanner strong { font-size: 14px; }
+.workflowBanner span { color: #6b657d; font-size: 12px; }
+.summaryGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.summaryCard { display: flex; align-items: center; gap: 13px; padding: 17px 18px; border: 1px solid #ececf3; border-radius: 16px; background: #fff; box-shadow: 0 8px 22px rgb(34 30 61 / 4%); color: #6544d2; }
+.summaryCard div { display: flex; flex-direction: column; gap: 2px; }
+.summaryCard span { color: #767388; font-size: 12px; }
+.summaryCard strong { color: #282536; font-size: 22px; }
+.toolbar { display: flex; justify-content: flex-end; }
+.pageHint { margin-right: auto; align-self: center; color: #878294; font-size: 12px; }
+.searchBox { display: flex; align-items: center; gap: 8px; width: min(420px, 100%); padding: 10px 13px; border: 1px solid #e6e4ee; border-radius: 11px; background: #fff; color: #918ca0; }
+.searchBox input { width: 100%; border: 0; outline: 0; color: #2e2a3a; font: inherit; font-size: 13px; }
+.panel { overflow: hidden; border: 1px solid #ebeaf2; border-radius: 18px; background: #fff; box-shadow: 0 10px 30px rgb(37 31 70 / 4%); }
+.sectionHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 20px 22px; border-bottom: 1px solid #f0eff5; }
+.sectionHeader h2 { margin: 0; color: #282536; font-size: 16px; }
+.sectionHeader p { margin: 5px 0 0; color: #878294; font-size: 12px; }
+.sourceGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; padding: 16px; }
+.sourceCard { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 14px; border: 1px solid #eeeef4; border-radius: 14px; background: #fcfcfe; }
+.sourceIcon { display: grid; flex: 0 0 36px; width: 36px; height: 36px; place-items: center; border-radius: 10px; background: #eee9ff; color: #6849d3; }
+.sourceContent { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 3px; }
+.sourceTop { display: flex; align-items: center; gap: 7px; }
+.entityTag { display: inline-flex; width: fit-content; padding: 3px 7px; border-radius: 999px; background: #f0edff; color: #6342cb; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.sourceStatus { color: #8e899b; font-size: 10px; }
+.sourceContent strong { overflow: hidden; color: #322d42; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.sourceContent span:not(.entityTag), .sourceContent small { overflow: hidden; color: #777184; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.requestButton, .primaryButton, .approveButton, .rejectButton, .secondaryButton { display: inline-flex; align-items: center; justify-content: center; gap: 6px; border: 0; border-radius: 9px; cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.requestButton { padding: 9px 11px; background: #6b48d7; color: #fff; }
+.requestButton:hover, .primaryButton:hover { background: #5432bd; }
+.requestButton:disabled, .primaryButton:disabled, .approveButton:disabled, .rejectButton:disabled { cursor: not-allowed; opacity: .55; }
+.tabs { display: flex; gap: 5px; padding: 4px; border-radius: 10px; background: #f6f5fa; }
+.tabs button { padding: 7px 11px; border: 0; border-radius: 7px; background: transparent; color: #858092; cursor: pointer; font: inherit; font-size: 11px; }
+.tabs .tabActive { background: #fff; color: #5b3cc4; box-shadow: 0 2px 7px rgb(40 31 74 / 8%); font-weight: 700; }
+.tableWrap { overflow-x: auto; }
+.tableWrap table { width: 100%; border-collapse: collapse; min-width: 880px; }
+.tableWrap th { padding: 12px 16px; background: #fbfbfd; color: #8b8698; font-size: 10px; font-weight: 700; text-align: left; text-transform: uppercase; }
+.tableWrap td { padding: 13px 16px; border-top: 1px solid #f1f0f5; color: #4a4557; font-size: 12px; vertical-align: middle; }
+.tableWrap .numeric { text-align: right; }
+.tableWrap td strong, .tableWrap td small { display: block; }
+.tableWrap td strong { color: #393345; font-size: 12px; }
+.tableWrap td small { margin-top: 3px; color: #9993a5; font-size: 10px; }
+.reasonCell { max-width: 260px; color: #6f697b !important; }
+.status { display: inline-flex; padding: 4px 8px; border-radius: 999px; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.statusPending { background: #fff5dc; color: #9c6b00; }
+.statusSuccess { background: #e9f8ef; color: #1d8a4b; }
+.statusDanger { background: #ffeded; color: #c03c3c; }
+.actions { display: flex; align-items: center; gap: 6px; }
+.approveButton { padding: 7px 9px; background: #eaf8ef; color: #27834d; }
+.rejectButton { padding: 7px 9px; background: #fff0f0; color: #bf4646; }
+.muted { color: #aaa5b4; font-size: 11px; }
+.empty { padding: 28px !important; color: #9b96a7 !important; text-align: center; }
+.modalOverlay { position: fixed; z-index: 20; inset: 0; display: grid; place-items: center; padding: 20px; background: rgb(23 18 43 / 40%); }
+.modal { width: min(560px, 100%); overflow: hidden; border-radius: 18px; background: #fff; box-shadow: 0 24px 70px rgb(20 14 47 / 24%); }
+.modalLarge { width: min(980px, 100%); }
+.modalHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 15px; padding: 22px 24px 18px; border-bottom: 1px solid #f0eff5; }
+.modalHeader h2 { margin: 8px 0 4px; color: #2d2939; font-size: 18px; }
+.modalHeader p { margin: 0; color: #888293; font-size: 12px; }
+.closeButton { display: grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 8px; background: #f5f4f8; color: #706b7d; cursor: pointer; }
+.modalBody { display: flex; flex-direction: column; gap: 14px; padding: 22px 24px; }
+.pickerLayout { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(320px, .95fr); gap: 18px; min-height: 390px; }
+.pickerPane, .selectionPane { min-width: 0; padding: 14px; border: 1px solid #eeedf4; border-radius: 14px; background: #fcfcfe; }
+.pickerPane { display: flex; flex-direction: column; gap: 12px; }
+.searchLabel { display: flex; flex-direction: column; gap: 7px; color: #514b5e; font-size: 11px; font-weight: 700; }
+.pickerList { display: flex; flex-direction: column; gap: 7px; overflow-y: auto; max-height: 330px; padding-right: 3px; }
+.pickerItem { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px; border: 1px solid #ebeaf2; border-radius: 10px; background: #fff; color: #393345; cursor: pointer; text-align: left; }
+.pickerItem:hover, .pickerItemActive { border-color: #9a82e5; background: #f7f4ff; }
+.pickerItem:disabled { cursor: not-allowed; opacity: .55; }
+.pickerItem span { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
+.pickerItem strong, .pickerItem small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pickerItem strong { color: #3b315c; font-size: 12px; }
+.pickerItem small { color: #858092; font-size: 10px; }
+.pickerItem b { flex: 0 0 auto; color: #5d3bc8; font-size: 11px; }
+.pickerEmpty, .noSelection { display: flex; flex: 1; align-items: center; justify-content: center; flex-direction: column; gap: 8px; min-height: 220px; color: #9b96a7; font-size: 12px; text-align: center; }
+.resultLimit { color: #918b9e; font-size: 10px; }
+.selectionPane { display: flex; flex-direction: column; gap: 8px; }
+.selectionPane h3 { margin: 8px 0 0; color: #342b4e; font-size: 18px; }
+.selectionPane > p, .selectionPane > small { margin: 0; color: #7e778b; font-size: 11px; }
+.selectedHeader { display: flex; align-items: center; justify-content: space-between; }
+.selectedHeader button { border: 0; background: transparent; color: #6849d3; cursor: pointer; font: inherit; font-size: 11px; font-weight: 700; }
+.qtyInput { width: 100%; padding: 11px 12px; border: 1px solid #e1dfea; border-radius: 10px; outline: none; color: #3d384a; font: inherit; font-size: 13px; }
+.qtyInput:focus { border-color: #7655db; box-shadow: 0 0 0 3px rgb(118 85 219 / 12%); }
+.reasonLabel { display: flex; flex-direction: column; gap: 7px; color: #4b4657; font-size: 12px; font-weight: 700; }
+.reasonLabel span { color: #d54b4b; }
+.reasonLabel textarea { resize: vertical; min-height: 120px; padding: 11px 12px; border: 1px solid #e1dfea; border-radius: 10px; outline: none; color: #3d384a; font: inherit; font-size: 13px; line-height: 1.5; }
+.reasonLabel textarea:focus { border-color: #7655db; box-shadow: 0 0 0 3px rgb(118 85 219 / 12%); }
+.reasonLabel small { align-self: flex-end; color: #9a95a5; font-size: 10px; font-weight: 400; }
+.confirmHint { padding: 11px 12px; border-radius: 10px; background: #f7f5ff; color: #6c5b9c; font-size: 11px; line-height: 1.5; }
+.modalFooter { display: flex; justify-content: flex-end; gap: 9px; padding: 16px 24px; border-top: 1px solid #f0eff5; }
+.primaryButton, .secondaryButton { padding: 10px 14px; font-size: 12px; }
+.primaryButton { background: #6b48d7; color: #fff; }
+.secondaryButton { background: #f2f1f5; color: #655f70; }
+
+@media (max-width: 900px) { .page { padding: 22px 18px 34px; } .sourceGrid, .summaryGrid { grid-template-columns: 1fr; } .sectionHeader { flex-direction: column; } .toolbar { justify-content: stretch; } .pageHint { margin: 0 0 8px; } .searchBox { width: 100%; } .pickerLayout { grid-template-columns: 1fr; } .pickerList { max-height: 240px; } }
+@media (max-width: 560px) { .contextBar { align-items: flex-start; flex-wrap: wrap; } .contextHint { width: 100%; margin-left: 26px; } .workflowBanner { align-items: flex-start; } .modalHeader, .modalBody, .modalFooter { padding-left: 18px; padding-right: 18px; } }

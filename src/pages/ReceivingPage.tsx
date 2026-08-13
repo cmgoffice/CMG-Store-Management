@@ -18,6 +18,10 @@ type ProjectGroup<T> = {
   items: T[];
 };
 
+type HistoryEntry =
+  | { kind: 'receive'; date: string; request: ReceivingRequest }
+  | { kind: 'dispatch'; date: string; dispatch: DispatchRecord };
+
 function formatDateTime(value?: string) {
   if (!value) {
     return '-';
@@ -125,6 +129,12 @@ function getRequestProjectCode(request: ReceivingRequest) {
       request.projectName ||
       request.location,
   );
+}
+
+function getReceivingSourceLabel(request: ReceivingRequest) {
+  return request.sourceApp?.trim().toLowerCase() === 'project transfer'
+    ? 'รับเข้าจากการย้ายโครงการ'
+    : request.sourceApp || 'รับเข้าใหม่';
 }
 
 function getDispatchDestinationProjectCode(record: DispatchRecord) {
@@ -314,6 +324,33 @@ export function ReceivingPage() {
     }).length;
   }, [dispatchRecords, normalizedActiveProjectNo]);
 
+  const outgoingDispatches = useMemo(() => {
+    return dispatchRecords.filter((record) => {
+      const sourceProjectCode = normalizeProjectNoText(record.sourceProjectNo);
+      const isForActiveProject =
+        !normalizedActiveProjectNo || sourceProjectCode === normalizedActiveProjectNo;
+      const matchesQuery =
+        !normalizedQuery ||
+        [
+          record.dispatchNo,
+          record.sourceProjectNo,
+          record.sourceProjectName,
+          record.destinationProjectNo,
+          record.destinationProjectName,
+          record.transport,
+          record.note,
+          record.dispatchedByName,
+          record.status,
+          ...record.items.map((item) => `${item.receiveNo} ${item.prNo} ${item.poNo} ${item.itemNo} ${item.itemDescription} ${item.vendorName}`),
+        ]
+          .join(' ')
+          .toLowerCase()
+          .includes(normalizedQuery);
+
+      return isForActiveProject && matchesQuery;
+    });
+  }, [dispatchRecords, normalizedActiveProjectNo, normalizedQuery]);
+
   const pendingRequestGroups = useMemo(
     () => createProjectGroups(pendingRequests, getRequestProjectCode),
     [pendingRequests],
@@ -322,10 +359,20 @@ export function ReceivingPage() {
     () => createProjectGroups(incomingDispatches, getDispatchDestinationProjectCode),
     [incomingDispatches],
   );
-  const approvedRequestGroups = useMemo(
-    () => createProjectGroups(approvedRequests, getRequestProjectCode),
-    [approvedRequests],
-  );
+  const historyEntries = useMemo<HistoryEntry[]>(() => (
+    [
+      ...approvedRequests.map((request) => ({
+        kind: 'receive' as const,
+        date: request.approvedAt || request.receiveDate || request.requestedAt,
+        request,
+      })),
+      ...outgoingDispatches.map((dispatch) => ({
+        kind: 'dispatch' as const,
+        date: dispatch.dispatchedAt,
+        dispatch,
+      })),
+    ].sort((left, right) => Date.parse(right.date) - Date.parse(left.date))
+  ), [approvedRequests, outgoingDispatches]);
 
   const openRequestReceiveModal = (request: ReceivingRequest) => {
     setRequestReceiveError('');
@@ -868,55 +915,51 @@ export function ReceivingPage() {
         <section className={styles.panel}>
           <div className={styles.sectionHeader}>
             <div>
-              <h2>ประวัติการรับสินค้า</h2>
-              <p>คำขอที่อนุมัติแล้วจะแสดงเป็นกลุ่มตามรหัสโครงการ CMG เพื่อความสะดวกในการตรวจสอบ</p>
+              <h2>ประวัติการเข้า-ออก</h2>
+              <p>รวมรายการรับเข้าและทำออกจากการย้ายโครงการ เรียงตามวันที่ทำรายการล่าสุด</p>
             </div>
             <div className={styles.selectionNote}>Active: {activeProject?.projectNo ?? '-'}</div>
           </div>
 
-          {approvedRequestGroups.length === 0 ? (
-            <div className={styles.empty}>ไม่พบประวัติการรับสินค้าตามเงื่อนไข</div>
+          {historyActionError ? <div className={styles.historyError}>{historyActionError}</div> : null}
+          {historyEntries.length === 0 ? (
+            <div className={styles.empty}>ไม่พบประวัติการเข้า-ออกตามเงื่อนไข</div>
           ) : (
-            <>
-              {historyActionError ? <div className={styles.historyError}>{historyActionError}</div> : null}
-              {approvedRequestGroups.map((group) => (
-            <section key={group.projectCode} className={styles.projectGroup}>
-              <div className={styles.projectGroupHeader}>
-                <div>
-                  <div className={styles.projectCodeBadge}>CMG Project Code: {group.projectCode}</div>
-                  <div className={styles.groupMeta}>{group.items.length} approved request(s)</div>
-                </div>
-              </div>
+            <div className="tableScroll">
+              <table className={`table compact ${styles.receivingTable} ${styles.historyTable}`}>
+                <thead>
+                  <tr>
+                    <th>No.</th>
+                    <th>ประเภท</th>
+                    <th>เลขที่รายการ</th>
+                    <th>แหล่งที่มา/ปลายทาง</th>
+                    <th>PR</th>
+                    <th>Description</th>
+                    <th className="numeric">จำนวน</th>
+                    <th>ผู้ทำรายการ</th>
+                    <th>วันที่ทำรายการ</th>
+                    <th>Stock Receive Nos.</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historyEntries.flatMap((entry, historyIndex) => {
+                    if (entry.kind === 'receive') {
+                      const request = entry.request;
+                      const receiveDate = request.approvedAt || request.receiveDate || request.requestedAt;
 
-              <div className="tableScroll">
-                <table className={`table compact ${styles.receivingTable} ${styles.historyTable}`}>
-                  <thead>
-                    <tr>
-                      <th>No.</th>
-                      <th>Request ID</th>
-                      <th>PR</th>
-                      <th>Description</th>
-                      <th className="numeric">จำนวนรับเข้า</th>
-                      <th>Receive Name</th>
-                      <th>Approved By</th>
-                      <th>Approved At</th>
-                      <th>Stock Receive Nos.</th>
-                      <th>Status</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {group.items.flatMap((request, requestIndex) => (
-                      request.items.map((item, itemIndex) => {
+                      return request.items.map((item, itemIndex) => {
                         const stockReceiveNo = item.stockReceiveNo || request.stockReceiveNos?.[itemIndex];
                         return (
-                          <tr key={`${request.id}-${itemIndex}`} className={itemIndex === 0 ? styles.requestRowStart : undefined}>
+                          <tr key={`${request.id}-receive-${itemIndex}`} className={itemIndex === 0 ? styles.requestRowStart : undefined}>
                             {itemIndex === 0 ? (
                               <>
-                                <td rowSpan={request.items.length}>{requestIndex + 1}</td>
+                                <td rowSpan={request.items.length}>{historyIndex + 1}</td>
+                                <td rowSpan={request.items.length}>รับเข้า</td>
                                 <td rowSpan={request.items.length}>
                                   <div className={styles.requestIdAction}>
                                     <span className={styles.receiveCode}>{request.id}</span>
-                                    {hasRole('MasterAdmin') ? (
+                                    {hasRole('MasterAdmin') && request.sourceApp?.trim().toLowerCase() !== 'project transfer' ? (
                                       <button
                                         type="button"
                                         className={styles.deleteStockButton}
@@ -930,6 +973,7 @@ export function ReceivingPage() {
                                     ) : null}
                                   </div>
                                 </td>
+                                <td rowSpan={request.items.length}>{getReceivingSourceLabel(request)}</td>
                                 <td rowSpan={request.items.length} className={styles.prCell}>{request.prNo || '-'}</td>
                               </>
                             ) : null}
@@ -939,33 +983,54 @@ export function ReceivingPage() {
                             <td className="numeric">{item.receivedQty.toLocaleString()}</td>
                             {itemIndex === 0 ? (
                               <>
-                                <td rowSpan={request.items.length}>{request.receiveName || '-'}</td>
-                                <td rowSpan={request.items.length}>{request.approvedByName || '-'}</td>
-                                <td rowSpan={request.items.length}>{formatDateTime(request.approvedAt)}</td>
+                                <td rowSpan={request.items.length}>{request.approvedByName || request.receiveName || '-'}</td>
+                                <td rowSpan={request.items.length}>{formatDateTime(receiveDate)}</td>
                               </>
                             ) : null}
                             <td>
-                              {stockReceiveNo ? (
-                                <span className={styles.stockChip}>{stockReceiveNo}</span>
-                              ) : (
-                                <span className={styles.noteText}>-</span>
-                              )}
+                              {stockReceiveNo ? <span className={styles.stockChip}>{stockReceiveNo}</span> : <span className={styles.noteText}>-</span>}
                             </td>
                             {itemIndex === 0 ? (
-                              <td rowSpan={request.items.length}>
-                                <StatusBadge status={request.requestStatus} />
-                              </td>
+                              <td rowSpan={request.items.length}><StatusBadge status={request.requestStatus} /></td>
                             ) : null}
                           </tr>
                         );
-                      })
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-              ))}
-            </>
+                      });
+                    }
+
+                    const dispatch = entry.dispatch;
+                    const dispatchPrNos = Array.from(new Set(dispatch.items.map((item) => item.prNo).filter(Boolean))).join(', ') || '-';
+                    return dispatch.items.map((item, itemIndex) => (
+                      <tr key={`${dispatch.id}-dispatch-${itemIndex}`} className={itemIndex === 0 ? styles.requestRowStart : undefined}>
+                        {itemIndex === 0 ? (
+                          <>
+                            <td rowSpan={dispatch.items.length}>{historyIndex + 1}</td>
+                            <td rowSpan={dispatch.items.length}>ทำออก</td>
+                            <td rowSpan={dispatch.items.length}><span className={styles.receiveCode}>{dispatch.dispatchNo}</span></td>
+                            <td rowSpan={dispatch.items.length}>ย้ายโครงการไปยัง {dispatch.destinationProjectNo || '-'}</td>
+                            <td rowSpan={dispatch.items.length} className={styles.prCell}>{dispatchPrNos}</td>
+                          </>
+                        ) : null}
+                        <td className={`${styles.descriptionCell} ${styles.historyDescriptionCell}`}>
+                          {item.itemDescription?.trim() || '-'}
+                        </td>
+                        <td className="numeric">{item.qty.toLocaleString()}</td>
+                        {itemIndex === 0 ? (
+                          <>
+                            <td rowSpan={dispatch.items.length}>{dispatch.dispatchedByName || '-'}</td>
+                            <td rowSpan={dispatch.items.length}>{formatDateTime(dispatch.dispatchedAt)}</td>
+                          </>
+                        ) : null}
+                        <td><span className={styles.stockChip}>{item.stockReceiveNo}</span></td>
+                        {itemIndex === 0 ? (
+                          <td rowSpan={dispatch.items.length}><StatusBadge status={dispatch.status} /></td>
+                        ) : null}
+                      </tr>
+                    ));
+                  })}
+                </tbody>
+              </table>
+            </div>
           )}
         </section>
       )}
@@ -1346,11 +1411,13 @@ export function ReceivingPage() {
               {importPreviewRows.length > 0 ? (
                 <div className="table-wrap">
                   <table className={styles.importPreviewTable}>
-                    <thead><tr><th>รหัสสินค้า</th><th>ชื่อสินค้าในระบบ/CSV</th><th className="numeric">ยอดเดิม</th><th className="numeric">เพิ่ม</th><th className="numeric">ยอดใหม่</th></tr></thead>
+                    <thead><tr><th>รหัสสินค้า</th><th>PR</th><th>หมวดหมู่</th><th>ชื่อสินค้าในระบบ/CSV</th><th className="numeric">ยอดเดิม</th><th className="numeric">เพิ่ม</th><th className="numeric">ยอดใหม่</th></tr></thead>
                     <tbody>
                       {importPreviewRows.slice(0, 100).map((row) => (
                         <tr key={row.itemNo}>
                           <td>{row.itemNo}{row.itemType ? <small className={styles.itemTypeHint}>{row.itemType}</small> : null}</td>
+                          <td>{row.prNo || '-'}</td>
+                          <td>{ITEM_TYPE_OPTIONS.find((option) => option.code === row.itemType)?.label || '-'}</td>
                           <td>
                             {row.existingDescription || row.itemDescription}
                             {row.existingDescription && row.existingDescription !== row.itemDescription ? (

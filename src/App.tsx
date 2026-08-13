@@ -11,6 +11,8 @@ import { LoginPage } from './pages/LoginPage';
 import { RegisterPage } from './pages/RegisterPage';
 import { PendingApprovalPage } from './pages/PendingApprovalPage';
 import { AdminPanel } from './pages/AdminPanel';
+import { ProjectBorrowPage } from './pages/ProjectBorrowPage';
+import { CancellationPage } from './pages/CancellationPage';
 import { ProtectedRoute } from './components/ProtectedRoute';
 
 export function App() {
@@ -56,6 +58,7 @@ export function App() {
                 />
                 <Route path="/store/store" element={<StorePage />} />
                 <Route path="/store/withdraw" element={<WithdrawPage />} />
+                <Route path="/store/project-borrow" element={<ProjectBorrowPage />} />
                 <Route
                   path="/store/dispatch"
                   element={
@@ -65,6 +68,7 @@ export function App() {
                   }
                 />
                 <Route path="/receiving" element={<ReceivingPage />} />
+                <Route path="/cancellations" element={<CancellationPage />} />
                 
                 {/* Admin-only view */}
                 <Route

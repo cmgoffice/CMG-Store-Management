@@ -15,6 +15,8 @@ import {
   Store,
   X,
   ShieldCheck,
+  ArrowLeftRight,
+  ClipboardX,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
@@ -25,7 +27,7 @@ import { db } from '../firebase';
 import { collection, query, where, onSnapshot } from 'firebase/firestore';
 import styles from './Sidebar.module.css';
 
-type ActionMenuKey = 'receiving' | 'dispatch' | 'withdraw';
+type ActionMenuKey = 'receiving' | 'dispatch' | 'withdraw' | 'cancellation';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -59,7 +61,9 @@ const groups = [
       { to: '/receiving', label: 'รับสินค้า', icon: ClipboardCheck, actionKey: 'receiving' as const },
       { to: '/store/store', label: 'คลังโครงการ', icon: Store },
       { to: '/store/withdraw', label: 'เบิกสินค้า', icon: PackageMinus, actionKey: 'withdraw' as const },
+      { to: '/store/project-borrow', label: 'ยืม-คืนระหว่างโครงการ', icon: ArrowLeftRight },
       { to: '/store/dispatch', label: 'จัดส่งสินค้า', icon: SendToBack, actionKey: 'dispatch' as const },
+      { to: '/cancellations', label: 'ยกเลิกรายการ', icon: ClipboardX, actionKey: 'cancellation' as const },
     ],
   },
 ];
@@ -114,6 +118,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
     stockItems,
     receivingRequests,
     withdrawRecords,
+    cancellationRequests,
   } = useInventory();
   const { userProfile, logout } = useAuth();
   const { roleLabel, hasRole, hasAnyRole, canDispatch } = useRole();
@@ -283,8 +288,14 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
         count: dispatchableCount,
         title: `Dispatch รอ Action ${dispatchableCount} รายการ`,
       },
+      cancellation: {
+        count: cancellationRequests.filter((request) => request.status === 'Pending Approval' && (
+          !normalizedActiveProjectNo || request.projectNos.some((projectNo) => isForActiveProject(normalizeProjectNoText(projectNo)))
+        )).length,
+        title: `คำขอยกเลิกรออนุมัติ ${cancellationRequests.filter((request) => request.status === 'Pending Approval').length} รายการ`,
+      },
     };
-  }, [activeProjectNo, canDispatch, normalizedActiveProjectNo, receivingRequests, stockItems, withdrawRecords]);
+  }, [activeProjectNo, canDispatch, cancellationRequests, normalizedActiveProjectNo, receivingRequests, stockItems, withdrawRecords]);
 
   const [pendingCount, setPendingCount] = useState(0);
 

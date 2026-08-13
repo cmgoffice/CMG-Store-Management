@@ -14,7 +14,7 @@ function formatStatusLabel(status: StatusBadgeProps['status']) {
   const labels: Record<string, string> = {
     pending: 'รอดำเนินการ', approved: 'อนุมัติแล้ว', rejected: 'ไม่อนุมัติ', cancelled: 'ยกเลิกแล้ว',
     'Pending Dispatch': 'รอจัดส่ง', 'Pending Receipt': 'รอรับเข้า', 'In Transit': 'กำลังขนส่ง',
-    'Received at Site': 'รับเข้าหน้างานแล้ว', 'Waiting Return': 'รอคืน', Borrowed: 'ยืมแล้ว',
+    'Received at Site': 'รับเข้าหน้างานแล้ว', 'Waiting Return': 'รอคืน', Borrowed: 'ยืมมา',
     Overdue: 'เกินกำหนด', Issued: 'เบิกจ่ายแล้ว', Withdrawn: 'เบิกแล้ว', Returned: 'คืนแล้ว', Cancelled: 'ยกเลิกการเบิก', 'Dispatch Cancelled': 'ยกเลิกการจัดส่ง',
   };
   return labels[status] ?? status;

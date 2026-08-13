@@ -21,6 +21,11 @@ import { db, masterDataDb, masterDataProjectsPath, storage } from '../firebase';
 import { processPrPoReceivePayload } from '../services/prPoReceiveIntegration';
 import type {
   DispatchRecord,
+  CancellationEntityType,
+  CancellationRequest,
+  CancellationRequestStatus,
+  ProjectBorrowRequest,
+  ProjectBorrowStatus,
   PrPoReceivePayload,
   PrPoReceiveResponse,
   Project,
@@ -69,6 +74,7 @@ interface ApproveReceivingRequestLineInput {
 interface ImportStockLineInput {
   itemNo: string;
   itemDescription: string;
+  prNo: string;
   qty: number;
   itemType?: string;
   itemTypeGroup?: 'Type 1' | 'Type 2';
@@ -96,19 +102,51 @@ interface CreateWithdrawInput {
   photos: File[];
 }
 
+interface CreateProjectBorrowLineInput {
+  stockItemId: string;
+  qty: number;
+}
+
+interface CreateProjectBorrowInput {
+  borrowerProjectNo: string;
+  lenderProjectNo: string;
+  items: CreateProjectBorrowLineInput[];
+  purpose: string;
+  dueDate?: string;
+}
+
+interface CreateCancellationInput {
+  entityType: CancellationEntityType;
+  entityId: string;
+  reason: string;
+  qty?: number;
+}
+
 interface InventoryContextValue {
   projects: Project[];
+  allProjects: Project[];
   activeProjects: Project[];
   stockItems: StockItem[];
+  allStockItems: StockItem[];
   receivingRequests: ReceivingRequest[];
   dispatchRecords: DispatchRecord[];
   withdrawRecords: WithdrawRecord[];
+  projectBorrowRequests: ProjectBorrowRequest[];
+  cancellationRequests: CancellationRequest[];
   updateProjectStatus: (projectNo: string, status: ProjectStatus) => Promise<void>;
   createDispatch: (input: CreateDispatchInput) => Promise<void>;
   cancelDispatch: (dispatchId: string) => Promise<void>;
   createWithdraw: (input: CreateWithdrawInput) => Promise<void>;
   returnWithdraw: (withdrawId: string) => Promise<void>;
   cancelWithdraw: (withdrawId: string) => Promise<void>;
+  createProjectBorrowRequest: (input: CreateProjectBorrowInput) => Promise<void>;
+  approveProjectBorrowRequest: (requestId: string) => Promise<void>;
+  rejectProjectBorrowRequest: (requestId: string) => Promise<void>;
+  requestProjectBorrowReturn: (requestId: string) => Promise<void>;
+  completeProjectBorrowReturn: (requestId: string) => Promise<void>;
+  createCancellationRequest: (input: CreateCancellationInput) => Promise<void>;
+  approveCancellationRequest: (requestId: string) => Promise<void>;
+  rejectCancellationRequest: (requestId: string, rejectionReason?: string) => Promise<void>;
   approveReceipt: (receiveNo: string) => Promise<void>;
   approveReceivingRequest: (requestId: string, receivedItems?: ApproveReceivingRequestLineInput[]) => Promise<void>;
   receiveDispatch: (dispatchId: string, receivedItems?: ReceiveDispatchLineInput[]) => Promise<void>;
@@ -183,6 +221,58 @@ function normalizeWithdrawRecordStatus(value: unknown): WithdrawRecordStatus {
   return 'Issued';
 }
 
+function normalizeCancellationEntityType(value: unknown): CancellationEntityType {
+  const normalized = String(value || '').trim();
+  if (normalized === 'projectStock' || normalized === 'dispatch' || normalized === 'withdraw' || normalized === 'projectBorrow') {
+    return normalized;
+  }
+  return 'receiving';
+}
+
+function normalizeCancellationStatus(value: unknown): CancellationRequestStatus {
+  const normalized = String(value || '').trim();
+  if (normalized === 'Approved' || normalized === 'Rejected') {
+    return normalized;
+  }
+  return 'Pending Approval';
+}
+
+function normalizeCancellationRequest(data: DocumentData, fallbackId: string): CancellationRequest {
+  return {
+    id: normalizeText(data.id) || fallbackId,
+    cancellationNo: normalizeText(data.cancellationNo) || fallbackId,
+    entityType: normalizeCancellationEntityType(data.entityType),
+    entityId: normalizeText(data.entityId),
+    referenceNo: normalizeText(data.referenceNo) || normalizeText(data.entityId) || fallbackId,
+    projectNos: normalizeStringArray(data.projectNos),
+    projectLabel: normalizeText(data.projectLabel),
+    reason: normalizeText(data.reason),
+    cancelQty: normalizeNumber(data.cancelQty),
+    status: normalizeCancellationStatus(data.status),
+    approvalStep: Math.min(2, Math.max(0, normalizeNumber(data.approvalStep))) as 0 | 1 | 2,
+    requestedByUid: normalizeText(data.requestedByUid),
+    requestedByName: normalizeText(data.requestedByName),
+    requestedByEmail: normalizeText(data.requestedByEmail),
+    requestedAt: normalizeDateText(data.requestedAt) || normalizeDateText(data.createdAt),
+    firstApprovedAt: normalizeDateText(data.firstApprovedAt),
+    firstApprovedByUid: normalizeText(data.firstApprovedByUid),
+    firstApprovedByName: normalizeText(data.firstApprovedByName),
+    firstApprovedByEmail: normalizeText(data.firstApprovedByEmail),
+    secondApprovedAt: normalizeDateText(data.secondApprovedAt),
+    secondApprovedByUid: normalizeText(data.secondApprovedByUid),
+    secondApprovedByName: normalizeText(data.secondApprovedByName),
+    secondApprovedByEmail: normalizeText(data.secondApprovedByEmail),
+    rejectedAt: normalizeDateText(data.rejectedAt),
+    rejectedByUid: normalizeText(data.rejectedByUid),
+    rejectedByName: normalizeText(data.rejectedByName),
+    rejectedReason: normalizeText(data.rejectedReason),
+    completedAt: normalizeDateText(data.completedAt),
+    completedByUid: normalizeText(data.completedByUid),
+    completedByName: normalizeText(data.completedByName),
+    completedByEmail: normalizeText(data.completedByEmail),
+  };
+}
+
 function formatPersonName(firstName?: string, lastName?: string, fallback = 'Unknown User') {
   const fullName = [firstName, lastName].filter(Boolean).join(' ').trim();
   return fullName || fallback;
@@ -226,6 +316,26 @@ function createWithdrawNumber(projectNo: string) {
   const ss = String(now.getSeconds()).padStart(2, '0');
   const ms = String(now.getMilliseconds()).padStart(3, '0');
   return `${getProjectShortNo(projectNo)}-WD-${yyyy}${mm}${dd}-${hh}${min}${ss}${ms}`;
+}
+
+function createProjectBorrowNumber(projectNo: string) {
+  const now = new Date();
+  const stamp = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+    String(now.getHours()).padStart(2, '0'),
+    String(now.getMinutes()).padStart(2, '0'),
+    String(now.getSeconds()).padStart(2, '0'),
+    String(now.getMilliseconds()).padStart(3, '0'),
+  ].join('');
+  return `${getProjectShortNo(projectNo)}-BR-${stamp}`;
+}
+
+function createCancellationNumber() {
+  const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 17);
+  const suffix = Math.random().toString(36).slice(2, 6).toUpperCase();
+  return `CAN-${stamp}-${suffix}`;
 }
 
 function createProjectLabel(projectNo: string) {
@@ -435,6 +545,7 @@ function normalizeReceivingRequestItem(data: DocumentData, index: number): Recei
       normalizeText(data.itemNo ?? data.materialNo ?? data.iditem ?? data.descriptionKey) ||
       `ITEM-${String(index + 1).padStart(2, '0')}`,
     itemDescription: normalizeText(data.itemDescription ?? data.description ?? data.itemName),
+    prNo: normalizeText(data.prNo),
     orderedQty,
     receivedQty,
     unit: normalizeText(data.unit),
@@ -559,6 +670,9 @@ function normalizeStockItem(data: DocumentData, fallbackId: string): StockItem {
         ? undefined
         : normalizeNumber(data.lastReceivedQty),
     lastReceivedAt: normalizeDateText(data.lastReceivedAt),
+    projectBorrowRequestNo: normalizeText(data.projectBorrowRequestNo) || undefined,
+    borrowedFromProjectNo: normalizeProjectNoText(data.borrowedFromProjectNo) || undefined,
+    borrowerProjectNo: normalizeProjectNoText(data.borrowerProjectNo) || undefined,
   };
 }
 
@@ -668,6 +782,84 @@ function normalizeWithdrawRecord(data: DocumentData, fallbackId: string): Withdr
   };
 }
 
+function normalizeProjectBorrowStatus(value: unknown): ProjectBorrowStatus {
+  const normalized = String(value || '').trim().toLowerCase().replace(/_/g, ' ');
+  if (normalized === 'approved') return 'Pending Dispatch';
+  if (normalized === 'pending dispatch') return 'Pending Dispatch';
+  if (normalized === 'in transit') return 'In Transit';
+  if (normalized === 'borrowed' || normalized === 'rent / borrow') return 'Borrowed';
+  if (normalized === 'rejected') return 'Rejected';
+  if (normalized === 'return requested') return 'Return Requested';
+  if (normalized === 'returned') return 'Returned';
+  if (normalized === 'cancelled' || normalized === 'canceled') return 'Cancelled';
+  return 'Pending Approval';
+}
+
+function normalizeProjectBorrowRequest(data: DocumentData, fallbackId: string): ProjectBorrowRequest {
+  const requestNo = normalizeText(data.requestNo) || fallbackId;
+  const rawItems = Array.isArray(data.items) ? data.items : [];
+  const items = rawItems.map((rawItem, index) => {
+    const item = rawItem && typeof rawItem === 'object' ? rawItem as DocumentData : {};
+    return {
+      sourceStockItemId: normalizeText(item.sourceStockItemId) || normalizeText(item.stockItemId),
+      dispatchStockItemId: normalizeText(item.dispatchStockItemId) || undefined,
+      borrowedStockItemId: normalizeText(item.borrowedStockItemId) || undefined,
+      receiveNo: normalizeText(item.receiveNo) || `${requestNo}-${index + 1}`,
+      itemNo: normalizeText(item.itemNo),
+      itemDescription: normalizeText(item.itemDescription),
+      materialNo: normalizeText(item.materialNo) || undefined,
+      itemType: normalizeText(item.itemType) || undefined,
+      unit: normalizeText(item.unit) || undefined,
+      qty: normalizeNumber(item.qty),
+      receivedQty: item.receivedQty === undefined || item.receivedQty === null ? undefined : normalizeNumber(item.receivedQty),
+      amount: normalizeNumber(item.amount),
+      vendorName: normalizeText(item.vendorName),
+      sourceLocation: normalizeText(item.sourceLocation),
+      sourceStatus: (normalizeText(item.sourceStatus) as StockItem['status']) || 'Available',
+    };
+  });
+
+  return {
+    id: normalizeText(data.id) || fallbackId,
+    requestNo,
+    borrowerProjectNo: normalizeProjectNoText(data.borrowerProjectNo),
+    borrowerProjectName: normalizeText(data.borrowerProjectName),
+    lenderProjectNo: normalizeProjectNoText(data.lenderProjectNo),
+    lenderProjectName: normalizeText(data.lenderProjectName),
+    status: normalizeProjectBorrowStatus(data.status),
+    approvalStep: Math.min(2, Math.max(0, Math.floor(normalizeNumber(data.approvalStep)))) as 0 | 1 | 2,
+    approvedAt: normalizeDateText(data.approvedAt) || undefined,
+    approvedByUid: normalizeText(data.approvedByUid) || undefined,
+    approvedByName: normalizeText(data.approvedByName) || undefined,
+    firstApprovedAt: normalizeDateText(data.firstApprovedAt) || undefined,
+    firstApprovedByUid: normalizeText(data.firstApprovedByUid) || undefined,
+    firstApprovedByName: normalizeText(data.firstApprovedByName) || undefined,
+    secondApprovedAt: normalizeDateText(data.secondApprovedAt) || undefined,
+    secondApprovedByUid: normalizeText(data.secondApprovedByUid) || undefined,
+    secondApprovedByName: normalizeText(data.secondApprovedByName) || undefined,
+    rejectedAt: normalizeDateText(data.rejectedAt) || undefined,
+    rejectedByUid: normalizeText(data.rejectedByUid) || undefined,
+    rejectedByName: normalizeText(data.rejectedByName) || undefined,
+    returnRequestedAt: normalizeDateText(data.returnRequestedAt) || undefined,
+    returnRequestedByUid: normalizeText(data.returnRequestedByUid) || undefined,
+    returnRequestedByName: normalizeText(data.returnRequestedByName) || undefined,
+    returnedAt: normalizeDateText(data.returnedAt) || undefined,
+    returnedByUid: normalizeText(data.returnedByUid) || undefined,
+    returnedByName: normalizeText(data.returnedByName) || undefined,
+    dispatchNo: normalizeText(data.dispatchNo) || undefined,
+    dispatchedAt: normalizeDateText(data.dispatchedAt) || undefined,
+    receivedAt: normalizeDateText(data.receivedAt) || undefined,
+    requestedByUid: normalizeText(data.requestedByUid),
+    requestedByName: normalizeText(data.requestedByName),
+    purpose: normalizeText(data.purpose),
+    dueDate: normalizeDateText(data.dueDate) || undefined,
+    items,
+    itemReceiveNos: normalizeStringArray(data.itemReceiveNos),
+    totalQty: normalizeNumber(data.totalQty, items.reduce((sum, item) => sum + item.qty, 0)),
+    createdAt: normalizeDateText(data.createdAt) || new Date().toISOString(),
+  };
+}
+
 function normalizeLocalProject(data: Partial<Project>, fallbackId: string): Project | null {
   const projectNo = normalizeText(data.projectNo) || normalizeText((data as { jobNo?: string }).jobNo) || fallbackId;
   if (!projectNo) {
@@ -745,6 +937,8 @@ export function InventoryProvider({ children }: PropsWithChildren) {
   const [projectStatuses, setProjectStatuses] = useState<Record<string, ProjectStatus>>({});
   const [dispatchList, setDispatchList] = useState<DispatchRecord[]>([]);
   const [withdrawList, setWithdrawList] = useState<WithdrawRecord[]>([]);
+  const [projectBorrowList, setProjectBorrowList] = useState<ProjectBorrowRequest[]>([]);
+  const [cancellationRequestList, setCancellationRequestList] = useState<CancellationRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [activeProjectNo, setActiveProjectNo] = useState<string>('');
   const projectList = useMemo(
@@ -759,7 +953,9 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     let unsubStock = () => {};
     let unsubDispatch = () => {};
     let unsubWithdraw = () => {};
+    let unsubProjectBorrow = () => {};
     let unsubReceivingRequests = () => {};
+    let unsubCancellationRequests = () => {};
 
     const projectsColRef = collection(db, APP_NAME, 'root', 'projects');
     unsubProjects = onSnapshot(
@@ -866,6 +1062,20 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       }
     );
 
+    const projectBorrowColRef = collection(db, APP_NAME, 'root', 'projectBorrowRequests');
+    unsubProjectBorrow = onSnapshot(
+      projectBorrowColRef,
+      (snapshot) => {
+        const loadedRecords = snapshot.docs.map((d) => normalizeProjectBorrowRequest(d.data(), d.id));
+        loadedRecords.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+        setProjectBorrowList(loadedRecords);
+      },
+      (error) => {
+        console.error('Failed to listen to project borrow updates:', error);
+        setProjectBorrowList([]);
+      }
+    );
+
     const receivingRequestsColRef = collection(db, APP_NAME, 'root', 'receivingRequests');
     unsubReceivingRequests = onSnapshot(
       receivingRequestsColRef,
@@ -880,6 +1090,20 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       }
     );
 
+    const cancellationRequestsColRef = collection(db, APP_NAME, 'root', 'cancellationRequests');
+    unsubCancellationRequests = onSnapshot(
+      cancellationRequestsColRef,
+      (snapshot) => {
+        const loadedRequests = snapshot.docs.map((requestDoc) => normalizeCancellationRequest(requestDoc.data(), requestDoc.id));
+        loadedRequests.sort((a, b) => b.requestedAt.localeCompare(a.requestedAt));
+        setCancellationRequestList(loadedRequests);
+      },
+      (error) => {
+        console.error('Failed to listen to cancellation request updates:', error);
+        setCancellationRequestList([]);
+      }
+    );
+
     return () => {
       unsubProjects();
       unsubMasterProjects();
@@ -887,7 +1111,9 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       unsubStock();
       unsubDispatch();
       unsubWithdraw();
+      unsubProjectBorrow();
       unsubReceivingRequests();
+      unsubCancellationRequests();
     };
   }, []);
 
@@ -926,7 +1152,9 @@ export function InventoryProvider({ children }: PropsWithChildren) {
 
     const assigned = userProfile.assignedProjects || [];
     return items.filter((item) => {
-      const projectNo = getStockItemProjectNo(item);
+      const projectNo = item.status === 'Borrowed' && item.borrowerProjectNo
+        ? normalizeProjectNoText(item.borrowerProjectNo)
+        : getStockItemProjectNo(item);
       return assigned.some((assignedProjectNo) => projectNoMatches(assignedProjectNo, projectNo));
     });
   }, [items, userProfile]);
@@ -988,6 +1216,39 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     );
   }, [userProfile, withdrawList]);
 
+  const visibleProjectBorrowRequests = useMemo(() => {
+    if (!userProfile) {
+      return [];
+    }
+
+    if (userProfile.role.includes('MasterAdmin') || userProfile.role.includes('Store Center')) {
+      return projectBorrowList;
+    }
+
+    const assigned = userProfile.assignedProjects || [];
+    return projectBorrowList.filter((record) =>
+      assigned.some((projectNo) => (
+        projectNoMatches(projectNo, record.borrowerProjectNo) ||
+        projectNoMatches(projectNo, record.lenderProjectNo)
+      ))
+    );
+  }, [projectBorrowList, userProfile]);
+
+  const visibleCancellationRequests = useMemo(() => {
+    if (!userProfile) {
+      return [];
+    }
+
+    if (userProfile.role.includes('MasterAdmin') || userProfile.role.includes('Store Center')) {
+      return cancellationRequestList;
+    }
+
+    const assigned = userProfile.assignedProjects || [];
+    return cancellationRequestList.filter((request) =>
+      request.projectNos.some((projectNo) => assigned.some((assignedProjectNo) => projectNoMatches(projectNo, assignedProjectNo)))
+    );
+  }, [cancellationRequestList, userProfile]);
+
   useEffect(() => {
     if (activeVisibleProjects.length > 0) {
       const isValid = activeVisibleProjects.some((p) => p.projectNo === activeProjectNo);
@@ -998,6 +1259,609 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       setActiveProjectNo('');
     }
   }, [activeVisibleProjects, activeProjectNo]);
+
+  const createProjectBorrowRequest = useCallback(async ({
+    borrowerProjectNo,
+    lenderProjectNo,
+    items: selectedLines,
+    purpose,
+    dueDate,
+  }: CreateProjectBorrowInput) => {
+    const normalizedBorrowerProjectNo = normalizeProjectNoText(borrowerProjectNo);
+    const normalizedLenderProjectNo = normalizeProjectNoText(lenderProjectNo);
+    if (!normalizedBorrowerProjectNo || !normalizedLenderProjectNo) {
+      throw new Error('กรุณาเลือกโครงการผู้ยืมและโครงการผู้ให้ยืม');
+    }
+    if (normalizedBorrowerProjectNo === normalizedLenderProjectNo) {
+      throw new Error('โครงการผู้ยืมและโครงการผู้ให้ยืมต้องไม่ใช่โครงการเดียวกัน');
+    }
+
+    const borrowerProject = projectList.find((project) => projectNoMatches(project.projectNo, normalizedBorrowerProjectNo));
+    const lenderProject = projectList.find((project) => projectNoMatches(project.projectNo, normalizedLenderProjectNo));
+    const canRequestForBorrower = userProfile?.role.includes('MasterAdmin') || userProfile?.role.includes('Store Center') ||
+      Boolean(userProfile?.assignedProjects?.some((projectNo) => projectNoMatches(projectNo, normalizedBorrowerProjectNo)));
+    if (!borrowerProject || !lenderProject || !canRequestForBorrower) {
+      throw new Error('ไม่พบโครงการ หรือบัญชีนี้ไม่มีสิทธิ์สร้างคำขอแทนโครงการผู้ยืม');
+    }
+    if (!purpose.trim()) {
+      throw new Error('กรุณาระบุวัตถุประสงค์การยืม');
+    }
+    if (!selectedLines.length) {
+      throw new Error('กรุณาเลือกรายการ EQM อย่างน้อย 1 รายการ');
+    }
+
+    const normalizedLines = selectedLines
+      .map((line) => ({ stockItemId: line.stockItemId, qty: Number(line.qty) }))
+      .filter((line) => line.stockItemId && Number.isFinite(line.qty) && line.qty > 0);
+    if (new Set(normalizedLines.map((line) => line.stockItemId)).size !== normalizedLines.length) {
+      throw new Error('ไม่สามารถเลือกรายการเดิมซ้ำในคำขอเดียวกันได้');
+    }
+
+    const selectedItems = normalizedLines.map((line) => {
+      const sourceItem = items.find((item) => getStockItemId(item) === line.stockItemId);
+      if (!sourceItem || getStockItemProjectNo(sourceItem) !== normalizedLenderProjectNo) {
+        throw new Error('ไม่พบรายการ EQM ของโครงการผู้ให้ยืม กรุณารีเฟรชแล้วลองใหม่');
+      }
+      const isEqm = String(sourceItem.itemType || '').trim().toUpperCase() === 'EQM' ||
+        getStockItemMaterialNo(sourceItem).startsWith('EQM');
+      if (!isEqm || sourceItem.status !== 'Available' || sourceItem.qty <= 0 || line.qty > sourceItem.qty) {
+        throw new Error(`รายการ ${sourceItem.itemNo || sourceItem.receiveNo} ไม่อยู่ในสถานะ Available หรือจำนวนไม่พอ`);
+      }
+      return { sourceItem, qty: line.qty };
+    });
+
+    const requestNo = createProjectBorrowNumber(borrowerProject.projectNo);
+    const createdAt = new Date().toISOString();
+    const requestedByName = formatPersonName(userProfile?.firstName, userProfile?.lastName, userProfile?.email ?? 'Unknown User');
+    const request: ProjectBorrowRequest = {
+      id: requestNo,
+      requestNo,
+      borrowerProjectNo: borrowerProject.projectNo,
+      borrowerProjectName: borrowerProject.projectName,
+      lenderProjectNo: lenderProject.projectNo,
+      lenderProjectName: lenderProject.projectName,
+      status: 'Pending Approval',
+      approvalStep: 0,
+      requestedByUid: userProfile?.uid ?? '',
+      requestedByName,
+      purpose: purpose.trim(),
+      dueDate: dueDate?.trim() || undefined,
+      items: selectedItems.map(({ sourceItem, qty }) => ({
+        sourceStockItemId: getStockItemId(sourceItem),
+        receiveNo: sourceItem.receiveNo,
+        itemNo: sourceItem.itemNo,
+        itemDescription: sourceItem.itemDescription,
+        materialNo: getStockItemMaterialNo(sourceItem),
+        itemType: sourceItem.itemType,
+        unit: sourceItem.unit,
+        qty,
+        amount: calculatePartialAmount(sourceItem.amount, sourceItem.qty, qty),
+        vendorName: sourceItem.vendorName,
+        sourceLocation: sourceItem.location,
+        sourceStatus: sourceItem.status,
+      })),
+      itemReceiveNos: selectedItems.map(({ sourceItem }) => getStockItemId(sourceItem)),
+      totalQty: selectedItems.reduce((sum, item) => sum + item.qty, 0),
+      createdAt,
+    };
+    await setDoc(doc(db, APP_NAME, 'root', 'projectBorrowRequests', requestNo), stripUndefined(request));
+  }, [items, projectList, userProfile]);
+
+  const getProjectBorrowApprover = useCallback((request: ProjectBorrowRequest) => {
+    if (!userProfile) return false;
+    if (userProfile.role.includes('MasterAdmin') || userProfile.role.includes('Store Center')) return true;
+    const projectRoles = Object.entries(userProfile.projectRoles || {})
+      .find(([projectNo]) => projectNoMatches(projectNo, request.lenderProjectNo))?.[1] || [];
+    const roles = new Set([...userProfile.role, ...projectRoles]);
+    return Boolean(userProfile.assignedProjects?.some((projectNo) => projectNoMatches(projectNo, request.lenderProjectNo))) &&
+      ['Admin Site', 'Store Site', 'Keeper'].some((role) => roles.has(role as typeof userProfile.role[number]));
+  }, [userProfile]);
+
+  const approveProjectBorrowRequest = useCallback(async (requestId: string) => {
+    const target = visibleProjectBorrowRequests.find((request) => request.id === requestId);
+    if (!target || target.status !== 'Pending Approval') return;
+    if (!getProjectBorrowApprover(target)) throw new Error('เฉพาะผู้มีสิทธิ์ของโครงการผู้ให้ยืมเท่านั้นที่อนุมัติได้');
+    const approverUid = userProfile?.uid ?? '';
+    const approverName = formatPersonName(userProfile?.firstName, userProfile?.lastName, userProfile?.email ?? 'Approver');
+    if (target.requestedByUid === approverUid) {
+      throw new Error('ผู้ขอรายการไม่สามารถอนุมัติรายการของตัวเองได้');
+    }
+    const requestRef = doc(db, APP_NAME, 'root', 'projectBorrowRequests', requestId);
+    const approvedAt = new Date().toISOString();
+
+    await runTransaction(db, async (transaction) => {
+      const requestSnapshot = await transaction.get(requestRef);
+      if (!requestSnapshot.exists()) throw new Error('ไม่พบคำขอยืมนี้แล้ว');
+      const current = normalizeProjectBorrowRequest(requestSnapshot.data(), requestId);
+      if (current.status !== 'Pending Approval') throw new Error('คำขอนี้ถูกดำเนินการไปแล้ว');
+      transaction.set(requestRef, stripUndefined({
+        status: 'Pending Dispatch',
+        approvalStep: 1,
+        approvedAt,
+        approvedByUid: approverUid,
+        approvedByName: approverName,
+      }), { merge: true });
+    });
+  }, [getProjectBorrowApprover, userProfile, visibleProjectBorrowRequests]);
+
+  const rejectProjectBorrowRequest = useCallback(async (requestId: string) => {
+    const target = visibleProjectBorrowRequests.find((request) => request.id === requestId);
+    if (!target || target.status !== 'Pending Approval') return;
+    if (!getProjectBorrowApprover(target)) throw new Error('เฉพาะผู้มีสิทธิ์ของโครงการผู้ให้ยืมเท่านั้นที่ปฏิเสธได้');
+    const rejectedAt = new Date().toISOString();
+    await setDoc(doc(db, APP_NAME, 'root', 'projectBorrowRequests', requestId), {
+      status: 'Rejected',
+      rejectedAt,
+      rejectedByUid: userProfile?.uid ?? '',
+      rejectedByName: formatPersonName(userProfile?.firstName, userProfile?.lastName, userProfile?.email ?? 'Approver'),
+    }, { merge: true });
+  }, [getProjectBorrowApprover, userProfile, visibleProjectBorrowRequests]);
+
+  const requestProjectBorrowReturn = useCallback(async (requestId: string) => {
+    const target = visibleProjectBorrowRequests.find((request) => request.id === requestId);
+    if (!target || target.status !== 'Borrowed') return;
+    const canReturn = userProfile?.role.includes('MasterAdmin') || userProfile?.role.includes('Store Center') ||
+      userProfile?.assignedProjects?.some((projectNo) => projectNoMatches(projectNo, target.borrowerProjectNo));
+    if (!canReturn) throw new Error('เฉพาะโครงการผู้ยืมเท่านั้นที่แจ้งคืนได้');
+    await setDoc(doc(db, APP_NAME, 'root', 'projectBorrowRequests', requestId), {
+      status: 'Return Requested',
+      returnRequestedAt: new Date().toISOString(),
+      returnRequestedByUid: userProfile?.uid ?? '',
+      returnRequestedByName: formatPersonName(userProfile?.firstName, userProfile?.lastName, userProfile?.email ?? 'User'),
+    }, { merge: true });
+  }, [userProfile, visibleProjectBorrowRequests]);
+
+  const completeProjectBorrowReturn = useCallback(async (requestId: string) => {
+    const target = visibleProjectBorrowRequests.find((request) => request.id === requestId);
+    if (!target || target.status !== 'Return Requested') return;
+    const canReceive = userProfile?.role.includes('MasterAdmin') || userProfile?.role.includes('Store Center') ||
+      userProfile?.assignedProjects?.some((projectNo) => projectNoMatches(projectNo, target.lenderProjectNo));
+    if (!canReceive) throw new Error('เฉพาะโครงการผู้ให้ยืมเท่านั้นที่ยืนยันรับคืนได้');
+    const returnedAt = new Date().toISOString();
+    const requestRef = doc(db, APP_NAME, 'root', 'projectBorrowRequests', requestId);
+    await runTransaction(db, async (transaction) => {
+      const requestSnapshot = await transaction.get(requestRef);
+      if (!requestSnapshot.exists()) throw new Error('ไม่พบคำขอยืมนี้แล้ว');
+      const current = normalizeProjectBorrowRequest(requestSnapshot.data(), requestId);
+      if (current.status !== 'Return Requested') throw new Error('คำขอนี้ยังไม่อยู่ระหว่างรอรับคืน');
+      const sourceRefs = current.items.map((item) => doc(db, APP_NAME, 'root', 'stockItems', item.sourceStockItemId));
+      const borrowedRefs = current.items.map((item) => item.borrowedStockItemId
+        ? doc(db, APP_NAME, 'root', 'stockItems', item.borrowedStockItemId)
+        : null);
+      const sourceSnapshots = await Promise.all(sourceRefs.map((sourceRef) => transaction.get(sourceRef)));
+      const borrowedSnapshots = await Promise.all(borrowedRefs.map((borrowedRef) => borrowedRef ? transaction.get(borrowedRef) : null));
+      current.items.forEach((item, index) => {
+        const sourceSnapshot = sourceSnapshots[index];
+        const sourceItem = sourceSnapshot.exists() ? normalizeStockItem(sourceSnapshot.data(), sourceSnapshot.id) : undefined;
+        const borrowedSnapshot = borrowedSnapshots[index];
+        const borrowedItem = borrowedSnapshot?.exists() ? normalizeStockItem(borrowedSnapshot.data(), borrowedSnapshot.id) : undefined;
+        const qtyToRestore = Math.min(item.qty, borrowedItem?.qty ?? item.receivedQty ?? item.qty);
+        const amountToRestore = borrowedItem?.amount ?? item.amount;
+        if (!sourceItem) {
+          throw new Error(`ไม่พบสต็อกต้นทางของ ${item.itemNo} จึงไม่สามารถรับคืนได้`);
+        }
+        transaction.set(sourceRefs[index], stripUndefined({
+          ...sourceItem,
+          stockItemId: item.sourceStockItemId,
+          receiveNo: sourceItem.receiveNo || item.receiveNo,
+          qty: sourceItem.qty + qtyToRestore,
+          amount: roundAmount(sourceItem.amount + amountToRestore),
+          status: 'Available',
+          location: sourceItem.location || item.sourceLocation,
+          purchasedForProject: sourceItem.purchasedForProject || createProjectLabel(current.lenderProjectNo),
+          cmgProjectCode: current.lenderProjectNo,
+          lastProjectBorrowReturnNo: current.requestNo,
+          lastProjectBorrowReturnedAt: returnedAt,
+        }), { merge: true });
+        if (borrowedRefs[index] && borrowedItem) {
+          const remainingQty = borrowedItem.qty - qtyToRestore;
+          if (remainingQty <= 0) {
+            transaction.delete(borrowedRefs[index]);
+          } else {
+            transaction.update(borrowedRefs[index], {
+              qty: remainingQty,
+              amount: Math.max(0, roundAmount(borrowedItem.amount - amountToRestore)),
+              status: borrowedItem.status === 'Borrowed' ? 'Received at Site' : borrowedItem.status,
+            });
+          }
+        }
+      });
+      transaction.set(requestRef, {
+        status: 'Returned',
+        returnedAt,
+        returnedByUid: userProfile?.uid ?? '',
+        returnedByName: formatPersonName(userProfile?.firstName, userProfile?.lastName, userProfile?.email ?? 'Receiver'),
+      }, { merge: true });
+    });
+  }, [userProfile, visibleProjectBorrowRequests]);
+
+  const getCancellationTarget = useCallback((entityType: CancellationEntityType, entityId: string) => {
+    if (entityType === 'projectStock') {
+      const target = visibleStockItems.find((item) => getStockItemId(item) === entityId);
+      if (!target || target.qty <= 0 || target.status === 'In Transit' || target.status === 'Pending Dispatch') return null;
+      return {
+        referenceNo: target.itemNo || target.receiveNo,
+        projectNos: [getStockItemProjectNo(target)].filter(Boolean),
+        projectLabel: `${target.itemDescription || '-'} · ${target.receiveNo}`,
+        stockQty: target.qty,
+      };
+    }
+    if (entityType === 'receiving') {
+      const target = receivingRequestList.find((request) => request.id === entityId);
+      if (!target || target.requestStatus !== 'approved') return null;
+      return {
+        referenceNo: target.receiveNo,
+        projectNos: [target.projectNo || target.cmgProjectCode].filter(Boolean),
+        projectLabel: target.projectName,
+      };
+    }
+    if (entityType === 'dispatch') {
+      const target = dispatchList.find((record) => record.id === entityId);
+      if (!target || target.status !== 'Pending Receipt') return null;
+      return {
+        referenceNo: target.dispatchNo,
+        projectNos: [target.sourceProjectNo, target.destinationProjectNo].filter(Boolean),
+        projectLabel: `${target.sourceProjectNo} → ${target.destinationProjectNo}`,
+      };
+    }
+    if (entityType === 'withdraw') {
+      const target = withdrawList.find((record) => record.id === entityId);
+      if (!target || target.status === 'Returned' || target.status === 'Cancelled') return null;
+      return {
+        referenceNo: target.withdrawNo,
+        projectNos: [target.projectNo].filter(Boolean),
+        projectLabel: target.projectName,
+      };
+    }
+    const target = projectBorrowList.find((request) => request.id === entityId);
+    if (!target || ['Rejected', 'In Transit', 'Returned', 'Cancelled'].includes(target.status)) return null;
+    return {
+      referenceNo: target.requestNo,
+      projectNos: [target.borrowerProjectNo, target.lenderProjectNo].filter(Boolean),
+      projectLabel: `${target.borrowerProjectNo} ↔ ${target.lenderProjectNo}`,
+    };
+  }, [dispatchList, projectBorrowList, receivingRequestList, visibleStockItems, withdrawList]);
+
+  const createCancellationRequest = useCallback(async ({ entityType, entityId, reason, qty }: CreateCancellationInput) => {
+    const trimmedReason = reason.trim();
+    if (trimmedReason.length < 5) {
+      throw new Error('กรุณาระบุเหตุผลการยกเลิกอย่างน้อย 5 ตัวอักษร');
+    }
+
+    const target = getCancellationTarget(entityType, entityId);
+    if (!target) {
+      throw new Error('รายการนี้ไม่อยู่ในสถานะที่สามารถขอยกเลิกได้แล้ว');
+    }
+    if (entityType === 'projectStock' && !projectNoMatches(activeProjectNo, target.projectNos[0] || '')) {
+      throw new Error('กรุณาเลือกสินค้าในคลังของโครงการที่กำลังใช้งานอยู่');
+    }
+
+    const cancelQty = entityType === 'projectStock' ? Math.floor(Number(qty)) : undefined;
+    if (entityType === 'projectStock' && (!cancelQty || cancelQty <= 0 || cancelQty > (target.stockQty ?? 0))) {
+      throw new Error(`จำนวนที่ยกเลิกต้องอยู่ระหว่าง 1 ถึง ${(target.stockQty ?? 0).toLocaleString()} ชิ้น`);
+    }
+
+    const duplicate = cancellationRequestList.find((request) =>
+      request.entityType === entityType &&
+      request.entityId === entityId &&
+      request.status === 'Pending Approval'
+    );
+    if (duplicate) {
+      throw new Error(`รายการนี้มีคำขอยกเลิก ${duplicate.cancellationNo} อยู่แล้ว`);
+    }
+
+    const requestedAt = new Date().toISOString();
+    const cancellationNo = createCancellationNumber();
+    const requestedByName = formatPersonName(
+      userProfile?.firstName,
+      userProfile?.lastName,
+      userProfile?.email ?? 'User'
+    );
+    const request: CancellationRequest = {
+      id: cancellationNo,
+      cancellationNo,
+      entityType,
+      entityId,
+      referenceNo: target.referenceNo,
+      projectNos: target.projectNos.map((projectNo) => normalizeProjectNoText(projectNo)),
+      projectLabel: target.projectLabel,
+      reason: trimmedReason,
+      cancelQty,
+      status: 'Pending Approval',
+      approvalStep: 0,
+      requestedByUid: userProfile?.uid ?? '',
+      requestedByName,
+      requestedByEmail: userProfile?.email ?? 'unknown@cmg.local',
+      requestedAt,
+    };
+
+    await setDoc(doc(db, APP_NAME, 'root', 'cancellationRequests', cancellationNo), stripUndefined(request));
+  }, [activeProjectNo, cancellationRequestList, getCancellationTarget, userProfile]);
+
+  const canApproveCancellation = useCallback((request: CancellationRequest) => {
+    if (!userProfile) return false;
+    if (userProfile.role.includes('MasterAdmin') || userProfile.role.includes('Store Center')) return true;
+    const assignedProject = userProfile.assignedProjects?.some((assignedProjectNo) =>
+      request.projectNos.some((projectNo) => projectNoMatches(projectNo, assignedProjectNo))
+    );
+    if (!assignedProject) return false;
+    const projectRoleValues = Object.entries(userProfile.projectRoles || {})
+      .filter(([projectNo]) => request.projectNos.some((targetProjectNo) => projectNoMatches(projectNo, targetProjectNo)))
+      .flatMap(([, roles]) => roles);
+    return [...userProfile.role, ...projectRoleValues].some((role) =>
+      ['Admin Site', 'Store Site', 'Keeper'].includes(role)
+    );
+  }, [userProfile]);
+
+  const approveCancellationRequest = useCallback(async (requestId: string) => {
+    const target = visibleCancellationRequests.find((request) => request.id === requestId);
+    if (!target || target.status !== 'Pending Approval') return;
+    if (!canApproveCancellation(target)) {
+      throw new Error('เฉพาะผู้มีสิทธิ์ของโครงการที่เกี่ยวข้องเท่านั้นที่อนุมัติได้');
+    }
+
+    const approverUid = userProfile?.uid ?? '';
+    const approverName = formatPersonName(userProfile?.firstName, userProfile?.lastName, userProfile?.email ?? 'Approver');
+    const approverEmail = userProfile?.email ?? 'unknown@cmg.local';
+    if (target.requestedByUid === approverUid || target.firstApprovedByUid === approverUid) {
+      throw new Error('ผู้ขอรายการหรือผู้อนุมัติขั้นแรกไม่สามารถอนุมัติซ้ำได้');
+    }
+
+    const cancellationRef = doc(db, APP_NAME, 'root', 'cancellationRequests', requestId);
+    const approvedAt = new Date().toISOString();
+    await runTransaction(db, async (transaction) => {
+      const cancellationSnapshot = await transaction.get(cancellationRef);
+      if (!cancellationSnapshot.exists()) throw new Error('ไม่พบคำขอยกเลิกนี้แล้ว');
+      const current = normalizeCancellationRequest(cancellationSnapshot.data(), requestId);
+      if (current.status !== 'Pending Approval') throw new Error('คำขอยกเลิกนี้ถูกดำเนินการไปแล้ว');
+
+      if (current.approvalStep === 0) {
+        transaction.set(cancellationRef, {
+          approvalStep: 1,
+          firstApprovedAt: approvedAt,
+          firstApprovedByUid: approverUid,
+          firstApprovedByName: approverName,
+          firstApprovedByEmail: approverEmail,
+        }, { merge: true });
+        return;
+      }
+      if (current.firstApprovedByUid === approverUid) {
+        throw new Error('ต้องใช้ผู้อนุมัติคนละคนในขั้นที่ 2');
+      }
+
+      if (current.entityType === 'projectStock') {
+        const entityRef = doc(db, APP_NAME, 'root', 'stockItems', current.entityId);
+        const entitySnapshot = await transaction.get(entityRef);
+        if (!entitySnapshot.exists()) throw new Error('ไม่พบสินค้าในคลังโครงการ');
+        const stockItem = normalizeStockItem(entitySnapshot.data(), entitySnapshot.id);
+        const cancelQty = Math.floor(current.cancelQty ?? 0);
+        if (cancelQty <= 0 || stockItem.qty < cancelQty) {
+          throw new Error(`สต็อกคงเหลือไม่พอสำหรับยกเลิก (คงเหลือ ${stockItem.qty.toLocaleString()} ชิ้น)`);
+        }
+        const beforeQty = stockItem.qty;
+        const afterQty = beforeQty - cancelQty;
+        const cancelledAmount = calculatePartialAmount(stockItem.amount, beforeQty, cancelQty);
+        const historyRef = doc(collection(db, APP_NAME, 'root', 'stockCancellationHistory'));
+        transaction.update(entityRef, {
+          qty: afterQty,
+          amount: Math.max(0, roundAmount(stockItem.amount - cancelledAmount)),
+          status: afterQty > 0 ? stockItem.status : 'Available',
+          lastCancelledAt: approvedAt,
+          lastCancelledByUid: approverUid,
+          lastCancelledByName: approverName,
+          lastCancellationReason: current.reason,
+        });
+        transaction.set(historyRef, stripUndefined({
+          id: historyRef.id,
+          cancellationNo: current.cancellationNo,
+          stockItemId: current.entityId,
+          receiveNo: stockItem.receiveNo,
+          itemNo: stockItem.itemNo,
+          itemDescription: stockItem.itemDescription,
+          projectNo: getStockItemProjectNo(stockItem),
+          cancelledQty: cancelQty,
+          beforeQty,
+          afterQty,
+          reason: current.reason,
+          cancelledAt: approvedAt,
+          cancelledByUid: approverUid,
+          cancelledByName: approverName,
+          cancelledByEmail: approverEmail,
+          requestedByUid: current.requestedByUid,
+          requestedByName: current.requestedByName,
+        }));
+      } else if (current.entityType === 'dispatch') {
+        const entityRef = doc(db, APP_NAME, 'root', 'dispatchRecords', current.entityId);
+        const entitySnapshot = await transaction.get(entityRef);
+        if (!entitySnapshot.exists()) throw new Error('ไม่พบรายการจัดส่งต้นทาง');
+        const dispatch = entitySnapshot.data() as DispatchRecord;
+        if (dispatch.status !== 'Pending Receipt') throw new Error('รายการจัดส่งไม่อยู่ในสถานะที่ยกเลิกได้แล้ว');
+        const stockIds = Array.from(new Set(dispatch.items.flatMap((item) => [
+          item.sourceStockItemId || item.stockItemId || item.receiveNo,
+          item.stockReceiveNo,
+        ])));
+        const stockSnapshots = await Promise.all(stockIds.map((stockId) => transaction.get(doc(db, APP_NAME, 'root', 'stockItems', stockId))));
+        const stockById = new Map(stockIds.map((stockId, index) => [stockId, stockSnapshots[index]]));
+        dispatch.items.forEach((item) => {
+          const sourceStockItemId = item.sourceStockItemId || item.stockItemId || item.receiveNo;
+          const sourceSnapshot = stockById.get(sourceStockItemId);
+          const transitSnapshot = stockById.get(item.stockReceiveNo);
+          if (!transitSnapshot?.exists()) throw new Error(`ไม่พบสินค้าระหว่างจัดส่ง ${item.stockReceiveNo}`);
+          const transitItem = normalizeStockItem(transitSnapshot.data(), transitSnapshot.id);
+          const sourceItem = sourceSnapshot?.exists() ? normalizeStockItem(sourceSnapshot.data(), sourceSnapshot.id) : undefined;
+          transaction.set(doc(db, APP_NAME, 'root', 'stockItems', sourceStockItemId), stripUndefined({
+            ...(sourceItem ?? transitItem),
+            stockItemId: sourceStockItemId,
+            receiveNo: sourceItem?.receiveNo || item.receiveNo,
+            qty: (sourceItem?.qty ?? 0) + transitItem.qty,
+            amount: roundAmount((sourceItem?.amount ?? 0) + transitItem.amount),
+            location: sourceItem?.location || item.sourceLocation,
+            purchasedForProject: sourceItem?.purchasedForProject || createProjectLabel(dispatch.sourceProjectNo),
+            cmgProjectCode: sourceItem?.cmgProjectCode || normalizeProjectNoText(dispatch.sourceProjectNo),
+            status: sourceItem?.status === 'In Transit' ? 'Received at Site' : (sourceItem?.status ?? 'Received at Site'),
+            lastCancelledDispatchNo: dispatch.dispatchNo,
+            lastCancelledDispatchAt: approvedAt,
+            lastCancellationReason: current.reason,
+          }), { merge: true });
+          transaction.delete(doc(db, APP_NAME, 'root', 'stockItems', item.stockReceiveNo));
+        });
+        transaction.set(entityRef, {
+          status: 'Dispatch Cancelled',
+          cancelledAt: approvedAt,
+          cancelledByUid: approverUid,
+          cancelledByName: approverName,
+          cancelledByEmail: approverEmail,
+          cancellationReason: current.reason,
+        }, { merge: true });
+      } else if (current.entityType === 'withdraw') {
+        const entityRef = doc(db, APP_NAME, 'root', 'withdrawRecords', current.entityId);
+        const entitySnapshot = await transaction.get(entityRef);
+        if (!entitySnapshot.exists()) throw new Error('ไม่พบรายการเบิกต้นทาง');
+        const withdraw = normalizeWithdrawRecord(entitySnapshot.data(), current.entityId);
+        if (withdraw.status === 'Returned' || withdraw.status === 'Cancelled') throw new Error('รายการเบิกไม่อยู่ในสถานะที่ยกเลิกได้แล้ว');
+        const groups = withdraw.items.reduce((map, item) => {
+          const list = map.get(item.stockItemId) ?? [];
+          list.push(item);
+          map.set(item.stockItemId, list);
+          return map;
+        }, new Map<string, typeof withdraw.items>());
+        const entries = Array.from(groups.entries());
+        const stockSnapshots = await Promise.all(entries.map(([stockId]) => transaction.get(doc(db, APP_NAME, 'root', 'stockItems', stockId))));
+        entries.forEach(([stockId, groupedItems], index) => {
+          const stockSnapshot = stockSnapshots[index];
+          const existing = stockSnapshot?.exists() ? normalizeStockItem(stockSnapshot.data(), stockSnapshot.id) : undefined;
+          const base = groupedItems[0];
+          if (!existing && !base.stockItemSnapshot) throw new Error(`ไม่พบสินค้าเดิม ${base.receiveNo} สำหรับคืนสต็อก`);
+          const qty = groupedItems.reduce((sum, item) => sum + item.qty, 0);
+          const amount = groupedItems.reduce((sum, item) => sum + item.amount, 0);
+          const restoredStatus = base.originalStatus === 'Borrowed' || base.originalStatus === 'Withdrawn' ? 'Received at Site' : base.originalStatus;
+          transaction.set(doc(db, APP_NAME, 'root', 'stockItems', stockId), stripUndefined({
+            ...(existing ? {} : base.stockItemSnapshot),
+            stockItemId: stockId,
+            receiveNo: existing?.receiveNo || base.receiveNo,
+            qty: (existing?.qty ?? 0) + qty,
+            amount: roundAmount((existing?.amount ?? 0) + amount),
+            status: !existing || existing.status === 'Borrowed' || existing.status === 'Withdrawn' || existing.qty <= 0 ? restoredStatus : existing.status,
+            location: existing?.location || base.sourceLocation,
+            cmgProjectCode: normalizeProjectNoText(withdraw.projectNo),
+            lastCancelledWithdrawNo: withdraw.withdrawNo,
+            lastCancelledAt: approvedAt,
+            lastCancellationReason: current.reason,
+          }), { merge: true });
+        });
+        transaction.set(entityRef, {
+          status: 'Cancelled',
+          cancelledAt: approvedAt,
+          cancelledByUid: approverUid,
+          cancelledByName: approverName,
+          cancelledByEmail: approverEmail,
+          cancellationReason: current.reason,
+        }, { merge: true });
+      } else if (current.entityType === 'receiving') {
+        const entityRef = doc(db, APP_NAME, 'root', 'receivingRequests', current.entityId);
+        const entitySnapshot = await transaction.get(entityRef);
+        if (!entitySnapshot.exists()) throw new Error('ไม่พบรายการรับเข้าต้นทาง');
+        const receiving = normalizeReceivingRequest(entitySnapshot.data(), current.entityId);
+        if (receiving.requestStatus !== 'approved') throw new Error('รายการรับเข้าไม่อยู่ในสถานะที่ยกเลิกได้แล้ว');
+        const stockEntries = receiving.items.map((item, index) => ({
+          item,
+          stockItemId: item.stockReceiveNo || receiving.stockReceiveNos?.[index] || '',
+        })).filter(({ stockItemId }) => Boolean(stockItemId));
+        if (!stockEntries.length) throw new Error('รายการรับเข้าไม่มี Stock Receive No. สำหรับย้อนรายการ');
+        const stockSnapshots = await Promise.all(stockEntries.map(({ stockItemId }) => transaction.get(doc(db, APP_NAME, 'root', 'stockItems', stockItemId))));
+        stockEntries.forEach(({ item, stockItemId }, index) => {
+          const stockSnapshot = stockSnapshots[index];
+          if (!stockSnapshot.exists()) throw new Error(`ไม่พบสินค้า ${stockItemId} ในสต็อก`);
+          const stockItem = normalizeStockItem(stockSnapshot.data(), stockSnapshot.id);
+          if (stockItem.qty < item.receivedQty) throw new Error(`สต็อก ${stockItemId} คงเหลือไม่พอสำหรับย้อนรายการ`);
+          const remainingQty = stockItem.qty - item.receivedQty;
+          const remainingAmount = Math.max(0, roundAmount(stockItem.amount - item.amount));
+          if (remainingQty <= 0) {
+            transaction.delete(doc(db, APP_NAME, 'root', 'stockItems', stockItemId));
+          } else {
+            transaction.update(doc(db, APP_NAME, 'root', 'stockItems', stockItemId), {
+              qty: remainingQty,
+              amount: remainingAmount,
+              lastCancellationReason: current.reason,
+            });
+          }
+        });
+        transaction.set(entityRef, {
+          requestStatus: 'cancelled',
+          cancelledAt: approvedAt,
+          cancelledByUid: approverUid,
+          cancelledByName: approverName,
+          cancelledByEmail: approverEmail,
+          cancellationReason: current.reason,
+        }, { merge: true });
+      } else if (current.entityType === 'projectBorrow') {
+        const entityRef = doc(db, APP_NAME, 'root', 'projectBorrowRequests', current.entityId);
+        const entitySnapshot = await transaction.get(entityRef);
+        if (!entitySnapshot.exists()) throw new Error('ไม่พบรายการยืม-คืนต้นทาง');
+        const borrow = normalizeProjectBorrowRequest(entitySnapshot.data(), current.entityId);
+        if (['Rejected', 'Returned', 'Cancelled'].includes(borrow.status)) throw new Error('รายการยืม-คืนไม่อยู่ในสถานะที่ยกเลิกได้แล้ว');
+        if (borrow.status === 'Borrowed' || borrow.status === 'Return Requested') {
+          const sourceRefs = borrow.items.map((item) => doc(db, APP_NAME, 'root', 'stockItems', item.sourceStockItemId));
+          const borrowedRefs = borrow.items.map((item) => doc(db, APP_NAME, 'root', 'stockItems', item.borrowedStockItemId || `${borrow.requestNo}-BORROW`));
+          const sourceSnapshots = await Promise.all(sourceRefs.map((sourceRef) => transaction.get(sourceRef)));
+          borrow.items.forEach((item, index) => {
+            const sourceSnapshot = sourceSnapshots[index];
+            const sourceItem = sourceSnapshot.exists() ? normalizeStockItem(sourceSnapshot.data(), sourceSnapshot.id) : undefined;
+            transaction.set(sourceRefs[index], stripUndefined({
+              ...(sourceItem ?? {}),
+              stockItemId: item.sourceStockItemId,
+              receiveNo: sourceItem?.receiveNo || item.receiveNo,
+              qty: (sourceItem?.qty ?? 0) + item.qty,
+              amount: roundAmount((sourceItem?.amount ?? 0) + item.amount),
+              status: 'Available',
+              location: sourceItem?.location || item.sourceLocation,
+              purchasedForProject: sourceItem?.purchasedForProject || createProjectLabel(borrow.lenderProjectNo),
+              cmgProjectCode: borrow.lenderProjectNo,
+              lastCancelledProjectBorrowNo: borrow.requestNo,
+              lastCancelledAt: approvedAt,
+              lastCancellationReason: current.reason,
+            }), { merge: true });
+            transaction.delete(borrowedRefs[index]);
+          });
+        }
+        transaction.set(entityRef, {
+          status: 'Cancelled',
+          cancelledAt: approvedAt,
+          cancelledByUid: approverUid,
+          cancelledByName: approverName,
+          cancelledByEmail: approverEmail,
+          cancellationReason: current.reason,
+        }, { merge: true });
+      }
+
+      transaction.set(cancellationRef, {
+        status: 'Approved',
+        approvalStep: 2,
+        secondApprovedAt: approvedAt,
+        secondApprovedByUid: approverUid,
+        secondApprovedByName: approverName,
+        secondApprovedByEmail: approverEmail,
+        completedAt: approvedAt,
+        completedByUid: approverUid,
+        completedByName: approverName,
+        completedByEmail: approverEmail,
+      }, { merge: true });
+    });
+  }, [canApproveCancellation, userProfile, visibleCancellationRequests]);
+
+  const rejectCancellationRequest = useCallback(async (requestId: string, rejectionReason = '') => {
+    const target = visibleCancellationRequests.find((request) => request.id === requestId);
+    if (!target || target.status !== 'Pending Approval') return;
+    if (!canApproveCancellation(target)) throw new Error('เฉพาะผู้มีสิทธิ์ของโครงการที่เกี่ยวข้องเท่านั้นที่ปฏิเสธได้');
+    const rejectedAt = new Date().toISOString();
+    await setDoc(doc(db, APP_NAME, 'root', 'cancellationRequests', requestId), {
+      status: 'Rejected',
+      rejectedAt,
+      rejectedByUid: userProfile?.uid ?? '',
+      rejectedByName: formatPersonName(userProfile?.firstName, userProfile?.lastName, userProfile?.email ?? 'Approver'),
+      rejectedReason: rejectionReason.trim(),
+    }, { merge: true });
+  }, [canApproveCancellation, userProfile, visibleCancellationRequests]);
 
   const createDispatch = useCallback(async ({
     sourceProjectNo,
@@ -1135,6 +1999,32 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         };
       });
 
+      const borrowCandidates = projectBorrowList.filter((request) =>
+        request.status === 'Pending Dispatch' &&
+        projectNoMatches(request.lenderProjectNo, sourceProject.projectNo) &&
+        projectNoMatches(request.borrowerProjectNo, targetProject.projectNo)
+      );
+      const borrowRefs = borrowCandidates.map((request) =>
+        doc(db, APP_NAME, 'root', 'projectBorrowRequests', request.id)
+      );
+      const borrowSnapshots = await Promise.all(borrowRefs.map((borrowRef) => transaction.get(borrowRef)));
+      const dispatchBySourceId = new Map(
+        dispatchSnapshots.map((snapshot) => [snapshot.sourceStockItemId, snapshot])
+      );
+      const linkedBorrowRequests = borrowCandidates
+        .map((request, index) => ({ request, ref: borrowRefs[index], snapshot: borrowSnapshots[index] }))
+        .filter(({ request, snapshot }) => {
+          if (!snapshot.exists()) return false;
+          const current = normalizeProjectBorrowRequest(snapshot.data(), request.id);
+          return current.status === 'Pending Dispatch' && current.items.every((item) => {
+            const dispatched = dispatchBySourceId.get(item.sourceStockItemId);
+            return Boolean(dispatched && dispatched.sourceItem.status === 'Available' && dispatched.qty >= item.qty);
+          });
+        });
+      const linkedBorrowItemBySourceId = new Map(
+        linkedBorrowRequests.flatMap(({ request }) => request.items.map((item) => [item.sourceStockItemId, request] as const))
+      );
+
       dispatchSnapshots.forEach(({ sourceItem, sourceStockItemId, amount, ...snapshot }) => {
         const sourceRef = doc(db, APP_NAME, 'root', 'stockItems', sourceStockItemId);
         const transitRef = doc(db, APP_NAME, 'root', 'stockItems', snapshot.stockReceiveNo);
@@ -1159,11 +2049,26 @@ export function InventoryProvider({ children }: PropsWithChildren) {
             location: createTransitLocation(targetProject.projectNo),
             purchasedForProject: createProjectLabel(targetProject.projectNo),
             cmgProjectCode: normalizeProjectNoText(targetProject.projectNo),
+            projectBorrowRequestNo: linkedBorrowItemBySourceId.get(sourceStockItemId)?.requestNo,
+            borrowedFromProjectNo: linkedBorrowItemBySourceId.get(sourceStockItemId)?.lenderProjectNo,
+            borrowerProjectNo: linkedBorrowItemBySourceId.get(sourceStockItemId)?.borrowerProjectNo || targetProject.projectNo,
             status: 'In Transit',
             lastDispatchNo: dispatchNo,
             lastDispatchedAt: dispatchedAt,
           })
         );
+      });
+
+      linkedBorrowRequests.forEach(({ request, ref }) => {
+        transaction.set(ref, stripUndefined({
+          status: 'In Transit',
+          dispatchNo,
+          dispatchedAt,
+          items: request.items.map((item) => ({
+            ...item,
+            dispatchStockItemId: dispatchBySourceId.get(item.sourceStockItemId)?.stockReceiveNo,
+          })),
+        }), { merge: true });
       });
 
       const record: DispatchRecord = {
@@ -1187,7 +2092,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
 
       transaction.set(dispatchRef, stripUndefined(record));
     });
-  }, [items, projectList, userProfile]);
+  }, [items, projectBorrowList, projectList, userProfile]);
 
   const cancelDispatch = useCallback(async (dispatchId: string) => {
     const target = dispatchList.find((record) => record.id === dispatchId);
@@ -1726,13 +2631,16 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     const plans = target.items.map((item) => {
       const transitStockItem = items.find((stockItem) => getStockItemId(stockItem) === item.stockReceiveNo);
       const materialNo = normalizeMaterialNo(item.materialNo || transitStockItem?.materialNo || item.itemNo);
+      const isProjectBorrowTransit = Boolean(transitStockItem?.projectBorrowRequestNo);
       const existingDestinationItem = findStockItemByIdentity(
         items,
         destinationProjectNo,
         materialNo,
         transitIds,
       );
-      const destinationStockItemId = existingDestinationItem
+      const destinationStockItemId = isProjectBorrowTransit
+        ? `${item.stockReceiveNo}-BORROWED`
+        : existingDestinationItem
         ? getStockItemId(existingDestinationItem)
         : createStockIdentityDocumentId(destinationProjectNo, materialNo) || item.stockReceiveNo;
 
@@ -1759,6 +2667,13 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       const stockSnapshotById = new Map(
         allStockIds.map((stockItemId, index) => [stockItemId, allStockSnapshots[index]])
       );
+      const borrowCandidates = projectBorrowList.filter((request) =>
+        request.status === 'In Transit' && request.dispatchNo === target.dispatchNo
+      );
+      const borrowRefs = borrowCandidates.map((request) =>
+        doc(db, APP_NAME, 'root', 'projectBorrowRequests', request.id)
+      );
+      const borrowSnapshots = await Promise.all(borrowRefs.map((borrowRef) => transaction.get(borrowRef)));
       const destinationGroups = new Map<string, Array<{
         plan: typeof plans[number];
         transitStockItem: StockItem;
@@ -1800,6 +2715,53 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         };
       });
 
+      const transferHistoryItems = receivedSnapshots
+        .filter((item) => item.receivedQty > 0)
+        .map((item) => ({
+          itemNo: item.itemNo,
+          itemDescription: item.itemDescription,
+          orderedQty: item.qty,
+          receivedQty: item.receivedQty,
+          unit: item.unit,
+          amount: calculatePartialAmount(item.amount ?? 0, item.qty, item.receivedQty),
+          materialNo: item.materialNo,
+          stockReceiveNo: item.destinationStockItemId,
+        }));
+
+      const receivedBySourceId = new Map(
+        receivedSnapshots.map((item) => [item.sourceStockItemId, item])
+      );
+      const linkedReceiveRequests = borrowCandidates
+        .map((request, index) => ({ request, ref: borrowRefs[index], snapshot: borrowSnapshots[index] }))
+        .filter(({ snapshot }) => snapshot.exists())
+        .map(({ request, ref, snapshot }) => ({
+          request: normalizeProjectBorrowRequest(snapshot?.data() as DocumentData, request.id),
+          ref,
+        }))
+        .filter(({ request }) => request.status === 'In Transit');
+      const borrowDestinationIds = new Set(
+        linkedReceiveRequests.flatMap(({ request }) => request.items
+          .map((item) => receivedBySourceId.get(item.sourceStockItemId)?.destinationStockItemId)
+          .filter((stockItemId): stockItemId is string => Boolean(stockItemId)))
+      );
+
+      linkedReceiveRequests.forEach(({ request, ref }) => {
+        const nextItems = request.items.map((item) => {
+          const received = receivedBySourceId.get(item.sourceStockItemId);
+          return {
+            ...item,
+            borrowedStockItemId: received?.destinationStockItemId || item.borrowedStockItemId,
+            receivedQty: received?.receivedQty ?? item.receivedQty ?? 0,
+          };
+        });
+        const isFullyReceived = nextItems.every((item) => (item.receivedQty ?? 0) >= item.qty);
+        transaction.set(ref, stripUndefined({
+          status: isFullyReceived ? 'Borrowed' : 'In Transit',
+          receivedAt: isFullyReceived ? receivedAt : undefined,
+          items: nextItems,
+        }), { merge: true });
+      });
+
       destinationGroups.forEach((groupedPlans, destinationStockItemId) => {
         const destinationSnapshot = stockSnapshotById.get(destinationStockItemId);
         const destinationIsTransitItem = groupedPlans.some(
@@ -1826,7 +2788,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
             qty: (existingDestinationItem?.qty ?? 0) + qtyToAdd,
             amount: roundAmount((existingDestinationItem?.amount ?? 0) + amountToAdd),
             materialNo: base.plan.materialNo,
-            status: 'Received at Site',
+            status: borrowDestinationIds.has(destinationStockItemId) ? 'Borrowed' : 'Received at Site',
             location: createProjectStoreLocation(target.destinationProjectNo),
             purchasedForProject: createProjectLabel(target.destinationProjectNo),
             projectId: target.destinationProjectNo,
@@ -1861,8 +2823,48 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         },
         { merge: true }
       );
+
+      const transferHistoryId = `${target.dispatchNo}-RECEIVE`;
+      const transferHistoryRef = doc(db, APP_NAME, 'root', 'receivingRequests', transferHistoryId);
+      transaction.set(
+        transferHistoryRef,
+        stripUndefined({
+          id: transferHistoryId,
+          documentNo: target.dispatchNo,
+          receiveNo: target.dispatchNo,
+          poNo: '-',
+          prNo: '-',
+          poType: 'Project Transfer',
+          projectId: target.destinationProjectNo,
+          cmgProjectCode: destinationProjectNo,
+          projectNo: target.destinationProjectNo,
+          projectName: target.destinationProjectName,
+          location: createProjectStoreLocation(target.destinationProjectNo),
+          vendorName: '',
+          receiveName: receivedByName,
+          receiveDate: receivedAt,
+          receivedByUid,
+          receivedByName,
+          receivedByEmail,
+          note: `รับเข้ามาจากการย้ายโครงการ ${target.sourceProjectNo} → ${target.destinationProjectNo} (${target.dispatchNo})`,
+          sourceApp: 'Project Transfer',
+          externalDocId: target.dispatchNo,
+          requestStatus: 'approved',
+          items: transferHistoryItems,
+          totalQty: totalReceivedQty,
+          totalAmount: roundAmount(transferHistoryItems.reduce((sum, item) => sum + item.amount, 0)),
+          requestedAt: target.dispatchedAt,
+          approvedAt: receivedAt,
+          approvedByUid: receivedByUid,
+          approvedByName: receivedByName,
+          approvedByEmail: receivedByEmail,
+          stockReceiveNos: transferHistoryItems
+            .map((item) => item.stockReceiveNo)
+            .filter((stockReceiveNo): stockReceiveNo is string => Boolean(stockReceiveNo)),
+        })
+      );
     });
-  }, [dispatchList, items, userProfile]);
+  }, [dispatchList, items, projectBorrowList, userProfile]);
 
   const approveReceivingRequest = useCallback(async (requestId: string, receivedItems?: ApproveReceivingRequestLineInput[]) => {
     const target = receivingRequestList.find(
@@ -2131,6 +3133,9 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       const existing = groups.get(materialNo);
       if (existing) {
         existing.qty += item.qty;
+        existing.prNo = existing.prNo || item.prNo;
+        existing.itemType = existing.itemType || item.itemType;
+        existing.itemTypeGroup = existing.itemTypeGroup || item.itemTypeGroup;
       } else {
         groups.set(materialNo, { ...item, itemNo: materialNo });
       }
@@ -2181,7 +3186,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
           receiveNo: existing?.receiveNo || requestId,
           sourceReceiveNo: requestId,
           poNo: existing?.poNo || '',
-          prNo: existing?.prNo || '',
+          prNo: item.prNo || existing?.prNo || '',
           poType: existing?.poType || 'CSV Import',
           itemNo: item.itemNo,
           itemDescription: existing?.itemDescription || item.itemDescription,
@@ -2211,7 +3216,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         id: requestId,
         receiveNo: requestId,
         poNo: '',
-        prNo: '',
+        prNo: Array.from(new Set(chunkAssignments.map(({ item }) => item.prNo).filter(Boolean))).join(', '),
         poType: 'CSV Import',
         projectId: project.projectId || normalizedProjectNo,
         cmgProjectCode: normalizedProjectNo,
@@ -2233,6 +3238,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         items: chunkAssignments.map(({ item, stockItemId }) => ({
           itemNo: item.itemNo,
           materialNo: item.itemNo,
+          prNo: item.prNo,
           itemDescription: item.itemDescription,
           receivedQty: item.qty,
           amount: 0,
@@ -2407,17 +3413,29 @@ export function InventoryProvider({ children }: PropsWithChildren) {
   const value = useMemo<InventoryContextValue>(
     () => ({
       projects: visibleProjects,
+      allProjects: projectList,
       activeProjects: activeVisibleProjects,
       stockItems: visibleStockItems,
+      allStockItems: items,
       receivingRequests: visibleReceivingRequests,
       dispatchRecords: visibleDispatchRecords,
       withdrawRecords: visibleWithdrawRecords,
+      projectBorrowRequests: visibleProjectBorrowRequests,
+      cancellationRequests: visibleCancellationRequests,
       updateProjectStatus,
       createDispatch,
       cancelDispatch,
       createWithdraw,
       returnWithdraw,
       cancelWithdraw,
+      createProjectBorrowRequest,
+      approveProjectBorrowRequest,
+      rejectProjectBorrowRequest,
+      requestProjectBorrowReturn,
+      completeProjectBorrowReturn,
+      createCancellationRequest,
+      approveCancellationRequest,
+      rejectCancellationRequest,
       approveReceipt,
       approveReceivingRequest,
       receiveDispatch,
@@ -2430,25 +3448,37 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     }),
     [
       activeProjectNo,
+      approveProjectBorrowRequest,
       approveReceivingRequest,
       approveReceipt,
       createDispatch,
+      createProjectBorrowRequest,
       cancelDispatch,
       createWithdraw,
       cancelWithdraw,
+      completeProjectBorrowReturn,
+      createCancellationRequest,
+      approveCancellationRequest,
+      rejectCancellationRequest,
       receiveDispatch,
       receiveNewItem,
       importStockItems,
       deleteReceivingRequest,
       receivePrPoPayload,
+      rejectProjectBorrowRequest,
+      requestProjectBorrowReturn,
       returnWithdraw,
       updateProjectStatus,
       activeVisibleProjects,
+      projectList,
       visibleDispatchRecords,
       visibleReceivingRequests,
       visibleStockItems,
       visibleWithdrawRecords,
       visibleProjects,
+      visibleProjectBorrowRequests,
+      visibleCancellationRequests,
+      items,
     ]
   );
 
