@@ -19,6 +19,7 @@ import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { APP_NAME } from '../config/firestore';
 import { db, masterDataDb, masterDataProjectsPath, storage } from '../firebase';
 import { processPrPoReceivePayload } from '../services/prPoReceiveIntegration';
+import { matchesItemType } from '../constants/itemTypes';
 import type {
   DispatchRecord,
   CancellationEntityType,
@@ -38,7 +39,7 @@ import type {
   WithdrawRecordStatus,
   WithdrawType,
 } from '../types/models';
-import { getStockItemId } from '../utils/stockItem';
+import { getStockItemId, isStockItemAvailableForMovement } from '../utils/stockItem';
 import {
   createStockIdentityDocumentId,
   normalizeMaterialNo,
@@ -617,6 +618,9 @@ function normalizeReceivingRequest(data: DocumentData, fallbackId: string): Rece
 }
 
 function normalizeStockItem(data: DocumentData, fallbackId: string): StockItem {
+  const rawItemType = normalizeText(data.itemType ?? data.type ?? data.category ?? data.itemCategory);
+  const receiveType = normalizeText(data.receiveType ?? data.poType);
+  const itemType = rawItemType || (receiveType.toUpperCase() === 'EQM' ? 'EQM' : '');
   return {
     stockItemId: normalizeText(data.stockItemId) || fallbackId,
     receiveNo: normalizeText(data.receiveNo ?? data.rpNo) || fallbackId,
@@ -639,8 +643,14 @@ function normalizeStockItem(data: DocumentData, fallbackId: string): StockItem {
     sourceReceiveNo: normalizeText(data.sourceReceiveNo),
     rpNo: normalizeText(data.rpNo),
     receiveType: normalizeText(data.receiveType),
-    itemType: normalizeText(data.itemType),
-    itemTypeGroup: normalizeText(data.itemTypeGroup) === 'Type 2' ? 'Type 2' : normalizeText(data.itemTypeGroup) === 'Type 1' ? 'Type 1' : undefined,
+    itemType,
+    itemTypeGroup: normalizeText(data.itemTypeGroup) === 'Type 2'
+      ? 'Type 2'
+      : normalizeText(data.itemTypeGroup) === 'Type 1'
+        ? 'Type 1'
+        : itemType.toUpperCase() === 'EQM'
+          ? 'Type 2'
+          : undefined,
     iditem: normalizeText(data.iditem),
     materialNo: normalizeText(data.materialNo),
     unit: normalizeText(data.unit),
@@ -1302,10 +1312,9 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       if (!sourceItem || getStockItemProjectNo(sourceItem) !== normalizedLenderProjectNo) {
         throw new Error('ไม่พบรายการ EQM ของโครงการผู้ให้ยืม กรุณารีเฟรชแล้วลองใหม่');
       }
-      const isEqm = String(sourceItem.itemType || '').trim().toUpperCase() === 'EQM' ||
-        getStockItemMaterialNo(sourceItem).startsWith('EQM');
-      if (!isEqm || sourceItem.status !== 'Available' || sourceItem.qty <= 0 || line.qty > sourceItem.qty) {
-        throw new Error(`รายการ ${sourceItem.itemNo || sourceItem.receiveNo} ไม่อยู่ในสถานะ Available หรือจำนวนไม่พอ`);
+      const isEqm = matchesItemType(sourceItem, 'EQM');
+      if (!isEqm || !isStockItemAvailableForMovement(sourceItem) || line.qty > sourceItem.qty) {
+        throw new Error(`รายการ ${sourceItem.itemNo || sourceItem.receiveNo} ไม่ใช่ EQM ที่พร้อมให้ยืม หรือจำนวนไม่พอ`);
       }
       return { sourceItem, qty: line.qty };
     });

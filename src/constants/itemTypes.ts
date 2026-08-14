@@ -17,6 +17,11 @@ export type ItemTypeGroup = (typeof ITEM_TYPE_OPTIONS)[number]['group'];
 
 type ItemTypeSource = {
   itemType?: string;
+  type?: string;
+  category?: string;
+  itemCategory?: string;
+  receiveType?: string;
+  poType?: string;
   materialNo?: string;
   itemNo?: string;
 };
@@ -31,19 +36,34 @@ function normalizeMaterialNo(value?: string) {
 
 export function getItemTypeOption(value?: string) {
   const normalizedValue = normalizeTypeCode(value);
-  return ITEM_TYPE_OPTIONS.find((option) => normalizeTypeCode(option.code) === normalizedValue);
+  const valuesToMatch = [
+    normalizedValue,
+    normalizedValue.replace(/^TYPE[\s_-]*/, ''),
+  ];
+  return ITEM_TYPE_OPTIONS.find((option) => valuesToMatch.includes(normalizeTypeCode(option.code)));
 }
 
 export function inferItemTypeCode(source: ItemTypeSource): ItemTypeCode | '' {
-  const explicitOption = getItemTypeOption(source.itemType);
+  const explicitOption = [
+    source.itemType,
+    source.type,
+    source.category,
+    source.itemCategory,
+    source.receiveType,
+    source.poType,
+  ]
+    .map((value) => getItemTypeOption(value))
+    .find(Boolean);
   if (explicitOption) {
     return explicitOption.code;
   }
 
-  const materialNo = normalizeMaterialNo(source.materialNo || source.itemNo);
+  const materialNumbers = [source.materialNo, source.itemNo]
+    .map((value) => normalizeMaterialNo(value))
+    .filter(Boolean);
   const inferredOption = [...ITEM_TYPE_OPTIONS]
     .sort((left, right) => right.code.length - left.code.length)
-    .find((option) => materialNo.startsWith(normalizeMaterialNo(option.code)));
+    .find((option) => materialNumbers.some((materialNo) => materialNo.startsWith(normalizeMaterialNo(option.code))));
 
   return inferredOption?.code ?? '';
 }

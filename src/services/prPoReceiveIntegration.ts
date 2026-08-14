@@ -225,6 +225,7 @@ function getStockItemForCreate(
   normalizedItem: NormalizedReceiveItem,
 ): Record<string, unknown> {
   const receiveType = readString(payload.receiveType);
+  const isEqmReceive = normalizeReceiveType(receiveType) === 'eqm';
   const projectId = readString(payload.projectId);
   const receiveNo = getPayloadReceiveNo(payload);
   const cmgProjectCode = normalizeProjectCode(payload.cmgProjectCode) || normalizeProjectCode(projectId);
@@ -251,6 +252,8 @@ function getStockItemForCreate(
     receiveType,
     iditem: normalizedItem.iditem,
     materialNo: normalizedItem.materialNo,
+    itemType: isEqmReceive ? 'EQM' : undefined,
+    itemTypeGroup: isEqmReceive ? 'Type 2' : undefined,
     unit: normalizedItem.unit,
     poItemIndex: normalizedItem.poItemIndex,
     orderedQty: normalizedItem.orderedQty,
@@ -301,6 +304,7 @@ async function upsertReceiveItem(
   const receiveNo = getPayloadReceiveNo(payload);
   const receiveDate = getPayloadDate(payload);
   const receiveType = readString(payload.receiveType);
+  const isEqmReceive = normalizeReceiveType(receiveType) === 'eqm';
   const cmgProjectCode = normalizeProjectCode(payload.cmgProjectCode) || normalizeProjectCode(projectId);
 
   return runTransaction(db, async (transaction) => {
@@ -360,6 +364,7 @@ async function upsertReceiveItem(
         itemDescription: normalizedItem.itemDescription,
         iditem: normalizedItem.iditem || null,
         materialNo: normalizedItem.materialNo || null,
+        ...(isEqmReceive ? { itemType: 'EQM', itemTypeGroup: 'Type 2' } : {}),
         vendorId: readString(payload.vendorId) || null,
         documentNo: readString(payload.documentNo) || null,
         poId: readString(payload.poId) || null,

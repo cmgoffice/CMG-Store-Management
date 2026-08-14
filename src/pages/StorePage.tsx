@@ -20,6 +20,7 @@ type StoreReceiveHistory = {
   qty: number;
   amount: number;
   sortValue: number;
+  movementType: 'receive' | 'withdraw';
 };
 
 type AggregatedStoreItem = {
@@ -146,6 +147,7 @@ export function StorePage() {
     stockItems,
     receivingRequests,
     dispatchRecords,
+    withdrawRecords,
     activeProjectNo,
   } = useInventory();
   const [query, setQuery] = useState('');
@@ -160,6 +162,29 @@ export function StorePage() {
     const requestByItemKey = new Map<string, (typeof receivingRequests)[number]>();
     const requestByDescriptionKey = new Map<string, (typeof receivingRequests)[number]>();
     const dispatchByKey = new Map<string, (typeof dispatchRecords)[number]>();
+    const withdrawByItemKey = new Map<string, Array<(typeof withdrawRecords)[number]>>();
+
+    const addWithdrawLookup = (key: string, record: (typeof withdrawRecords)[number]) => {
+      const current = withdrawByItemKey.get(key) ?? [];
+      if (!current.some((item) => item.id === record.id)) {
+        current.push(record);
+      }
+      withdrawByItemKey.set(key, current);
+    };
+
+    withdrawRecords.forEach((record) => {
+      record.itemReceiveNos
+        .map((value) => normalizeLookupKey(value))
+        .filter(Boolean)
+        .forEach((key) => addWithdrawLookup(key, record));
+
+      record.items.forEach((withdrawItem) => {
+        [withdrawItem.stockItemId, withdrawItem.receiveNo]
+          .map((value) => normalizeLookupKey(value))
+          .filter(Boolean)
+          .forEach((key) => addWithdrawLookup(key, record));
+      });
+    });
 
     receivingRequests.forEach((request) => {
       [
@@ -309,8 +334,7 @@ export function StorePage() {
             const form = dispatch
               ? dispatch.sourceProjectNo || 'Project Transfer'
               : 'New Receiving';
-
-            return {
+            const receiveHistory: StoreReceiveHistory = {
               id: item.stockItemId || item.receiveNo,
               receiveDate: formatBangkokDateTime(rawReceiveDate),
               prNo,
@@ -319,8 +343,33 @@ export function StorePage() {
               qty: item.qty,
               amount: item.amount,
               sortValue: getDateSortValue(rawReceiveDate),
+              movementType: 'receive',
             };
+            const matchedWithdrawals = new Map<string, (typeof withdrawRecords)[number]>();
+            requestKeys.forEach((key) => {
+              withdrawByItemKey.get(key)?.forEach((record) => matchedWithdrawals.set(record.id, record));
+            });
+            const withdrawHistory = Array.from(matchedWithdrawals.values()).flatMap((record) => (
+              record.items
+                .filter((withdrawItem) => [withdrawItem.stockItemId, withdrawItem.receiveNo]
+                  .map((value) => normalizeLookupKey(value))
+                  .some((key) => requestKeys.includes(key)))
+                .map((withdrawItem) => ({
+                  id: `${record.id}-${withdrawItem.stockItemId}`,
+                  receiveDate: formatBangkokDateTime(record.withdrawDate || record.createdAt),
+                  prNo: record.withdrawNo,
+                  form: record.type === 'borrow' ? 'Withdraw / Borrow' : 'Withdraw / Issue',
+                  receivedByName: record.requesterName || record.issuedByName || '-',
+                  qty: -withdrawItem.qty,
+                  amount: -withdrawItem.amount,
+                  sortValue: getDateSortValue(record.withdrawDate || record.createdAt),
+                  movementType: 'withdraw' as const,
+                }))
+            ));
+
+            return [receiveHistory, ...withdrawHistory];
           })
+          .flat()
           .sort((left, right) => right.sortValue - left.sortValue);
         const searchText = [
           location,
@@ -354,7 +403,7 @@ export function StorePage() {
         const rightSortValue = right.history[0]?.sortValue ?? 0;
         return rightSortValue - leftSortValue;
       });
-  }, [dispatchRecords, normalizedActiveProjectNo, query, receivingRequests, selectedItemType, stockItems]);
+  }, [dispatchRecords, normalizedActiveProjectNo, query, receivingRequests, selectedItemType, stockItems, withdrawRecords]);
 
   const handleToggleExpand = (itemId: string) => {
     setExpandedItemIds((current) =>

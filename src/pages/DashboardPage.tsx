@@ -10,7 +10,8 @@ import styles from './DashboardPage.module.css';
 
 export function DashboardPage() {
   const { stockItems, projects } = useInventory();
-  const { roleLabel, canDispatch, canApproveReceipt } = useRole();
+  const { roleLabel, canDispatch, canApproveReceipt, hasAnyRole } = useRole();
+  const canViewStock = hasAnyRole(['MasterAdmin', 'Store Center']);
 
   const pending = stockItems.filter((item) => item.status === 'Pending Dispatch');
   const inTransit = stockItems.filter((item) => item.status === 'In Transit');
@@ -50,7 +51,7 @@ export function DashboardPage() {
         <article className={styles.panel}>
           <div className={styles.panelHeader}>
             <h2>ความเคลื่อนไหวสินค้าล่าสุด</h2>
-            {canDispatch && (
+            {canViewStock && (
               <Link to="/store/stock">ดูสินค้าคงคลัง</Link>
             )}
           </div>

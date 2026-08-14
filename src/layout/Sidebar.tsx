@@ -142,7 +142,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
             return canManageProjects;
           }
           if (item.to === '/store/stock') {
-            return canDispatch;
+            return hasAnyRole(['MasterAdmin', 'Store Center']);
           }
           if (item.to === '/store/dispatch') {
             return canAccessDispatch;
@@ -152,7 +152,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
         return { ...group, items: filteredItems };
       })
       .filter((group) => group.items.length > 0);
-  }, [canAccessDispatch, canDispatch, canManageProjects]);
+  }, [canAccessDispatch, canManageProjects, hasAnyRole]);
   const location = useLocation();
   const miniProjects = useMemo(
     () => activeProjects.map((project, index) => ({ project, index })),

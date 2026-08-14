@@ -75,6 +75,7 @@ function getStockItemProjectNo(item: {
 export function DispatchPage() {
   const {
     projects,
+    allProjects,
     activeProjects,
     stockItems,
     dispatchRecords,
@@ -83,7 +84,7 @@ export function DispatchPage() {
     cancelDispatch,
     activeProjectNo,
   } = useInventory();
-  const { canDispatch } = useRole();
+  const { canDispatch, canCancelDispatch, hasRole } = useRole();
   const [query, setQuery] = useState('');
   const [selectedProject, setSelectedProject] = useState('');
   const [transport, setTransport] = useState('');
@@ -105,9 +106,15 @@ export function DispatchPage() {
   const normalizedQuery = query.trim().toLowerCase();
   const activeProject = activeProjects.find((project) => project.projectNo === activeProjectNo)
     ?? projects.find((project) => project.projectNo === activeProjectNo);
+  const canSelectAllDestinationProjects = hasRole('Store Site');
   const destinationProjects = useMemo(
-    () => activeProjects.filter((project) => project.projectNo !== activeProjectNo),
-    [activeProjectNo, activeProjects]
+    () => {
+      const projectPool = canSelectAllDestinationProjects ? allProjects : activeProjects;
+      return projectPool.filter(
+        (project) => project.status !== 'Disactive' && project.projectNo !== activeProjectNo
+      );
+    },
+    [activeProjectNo, activeProjects, allProjects, canSelectAllDestinationProjects]
   );
   const approvedBorrowRequests = useMemo(
     () => projectBorrowRequests.filter((request) =>
@@ -202,7 +209,7 @@ export function DispatchPage() {
   }, [dispatchQuantities, selectedItems]);
 
   const dispatchUnavailableReason = !canDispatch
-    ? 'Dispatch creation is available for Store Center only.'
+    ? 'Dispatch creation is available for Store Center or Store Site.'
     : destinationProjects.length === 0
       ? 'No other active project is available as a destination.'
       : dispatchableItems.length === 0
@@ -365,7 +372,7 @@ export function DispatchPage() {
   };
 
   const handleCancelDispatch = async (record: DispatchRecord) => {
-    if (!canDispatch || cancellingDispatchId || record.status !== 'Pending Receipt') {
+    if (!canCancelDispatch || cancellingDispatchId || record.status !== 'Pending Receipt') {
       return;
     }
 
@@ -420,7 +427,7 @@ export function DispatchPage() {
 
       {!canDispatch ? (
         <div className={styles.notice}>
-          Dispatch creation is available for Store Center only. Destination projects receive moved items from Receiving, tab ย้ายโครงการ.
+          Dispatch creation is available for Store Center or Store Site. Destination projects receive moved items from Receiving, tab ย้ายโครงการ.
         </div>
       ) : null}
 
@@ -468,12 +475,12 @@ export function DispatchPage() {
                         <button
                           type="button"
                           className={styles.cancelButton}
-                          disabled={!canDispatch || cancellingDispatchId === record.id}
+                          disabled={!canCancelDispatch || cancellingDispatchId === record.id}
                           onClick={(event) => {
                             event.stopPropagation();
                             handleCancelDispatch(record);
                           }}
-                          title={canDispatch ? 'ยกเลิกรายการจัดส่งและคืนยอดไปยัง Store ต้นทาง' : 'เฉพาะ Store Center สามารถยกเลิกรายการจัดส่งได้'}
+                          title={canCancelDispatch ? 'ยกเลิกรายการจัดส่งและคืนยอดไปยัง Store ต้นทาง' : 'เฉพาะ Store Center สามารถยกเลิกรายการจัดส่งได้'}
                         >
                           {cancellingDispatchId === record.id ? <span className={styles.spinner} /> : <X size={12} />}
                           <span>{cancellingDispatchId === record.id ? 'กำลังยกเลิก...' : 'ยกเลิก'}</span>

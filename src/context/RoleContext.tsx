@@ -14,6 +14,7 @@ interface RoleContextValue {
   hasRole: (role: UserRole) => boolean;
   hasAnyRole: (allowedRoles: readonly UserRole[]) => boolean;
   canDispatch: boolean;
+  canCancelDispatch: boolean;
   canApproveReceipt: boolean;
   canReceiveStock: boolean;
   isReadOnly: boolean;
@@ -103,7 +104,8 @@ export function RoleProvider({ children }: PropsWithChildren) {
     const hasAnyRole = (allowedRoles: readonly UserRole[]) =>
       allowedRoles.some((role) => roleSet.has(role));
 
-    const canDispatch = hasAnyRole(['MasterAdmin', 'Store Center']);
+    const canDispatch = hasAnyRole(['MasterAdmin', 'Store Center', 'Store Site']);
+    const canCancelDispatch = hasAnyRole(['MasterAdmin', 'Store Center']);
     const canApproveReceipt = true;
     const canReceiveStock = hasAnyRole(['MasterAdmin', 'Store Center']);
     const isReadOnly = !hasAnyRole([
@@ -119,6 +121,7 @@ export function RoleProvider({ children }: PropsWithChildren) {
       hasRole,
       hasAnyRole,
       canDispatch,
+      canCancelDispatch,
       canApproveReceipt,
       canReceiveStock,
       isReadOnly,
