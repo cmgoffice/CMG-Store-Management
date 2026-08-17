@@ -1,12 +1,12 @@
 import { CheckCircle2, ClipboardList, Download, FileUp, History, PackageCheck, Trash2, X } from 'lucide-react';
-import { useMemo, useRef, useState, type ChangeEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { ITEM_TYPE_OPTIONS } from '../constants/itemTypes';
-import { PageHeader } from '../components/PageHeader';
 import { SearchField } from '../components/SearchField';
 import { StatusBadge } from '../components/StatusBadge';
 import { useInventory } from '../context/InventoryContext';
 import { useRole } from '../context/RoleContext';
 import type { DispatchRecord, ReceivingRequest, ReceivingRequestItem, StockItem } from '../types/models';
+import { useSearchParams } from 'react-router-dom';
 import { downloadStockCsvTemplate, parseStockCsv, type StockCsvRow } from '../utils/stockCsv';
 import '../styles/tables.css';
 import styles from './ReceivingPage.module.css';
@@ -182,7 +182,9 @@ export function ReceivingPage() {
     activeProjectNo,
   } = useInventory();
   const { canApproveReceipt, hasRole } = useRole();
-  const [activeTab, setActiveTab] = useState<ReceivingTab>('receive');
+  const [searchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab');
+  const [activeTab, setActiveTab] = useState<ReceivingTab>(tabParam === 'incoming' || tabParam === 'log' ? tabParam : 'receive');
   const [query, setQuery] = useState('');
   const [approvingRequestId, setApprovingRequestId] = useState<string | null>(null);
   const [receivingRequest, setReceivingRequest] = useState<ReceivingRequest | null>(null);
@@ -203,6 +205,12 @@ export function ReceivingPage() {
   const [deletingHistoryItem, setDeletingHistoryItem] = useState('');
   const [historyActionError, setHistoryActionError] = useState('');
   const importInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (tabParam === 'incoming' || tabParam === 'log' || tabParam === 'receive') {
+      setActiveTab(tabParam);
+    }
+  }, [tabParam]);
 
   const activeProject = activeProjects.find((project) => project.projectNo === activeProjectNo)
     ?? projects.find((project) => project.projectNo === activeProjectNo);
@@ -617,49 +625,38 @@ export function ReceivingPage() {
 
   return (
     <div>
-      <PageHeader
-        eyebrow="Store"
-        title="รับสินค้า"
-        description={
-          activeProject
-            ? `Review receiving requests for Project ${activeProject.projectNo} and approve them into inventory.`
-            : 'Review incoming receiving requests from the external PR, PO system.'
-        }
-        actions={(
-          <>
-            <input
-              ref={importInputRef}
-              className={styles.hiddenFileInput}
-              type="file"
-              accept=".csv,text/csv"
-              onChange={handleImportFileChange}
-            />
-            <button type="button" className={styles.headerButton} onClick={downloadStockCsvTemplate}>
-              <Download size={16} />
-              Download template
-            </button>
-            <button
-              type="button"
-              className={`${styles.headerButton} ${styles.importButton}`}
-              disabled={!activeProjectNo || !canApproveReceipt}
-              title={!activeProjectNo ? 'กรุณาเลือกโครงการก่อนนำเข้า' : undefined}
-              onClick={() => importInputRef.current?.click()}
-            >
-              <FileUp size={16} />
-              Import CSV
-            </button>
-            <SearchField
-              value={query}
-              onChange={setQuery}
-              placeholder={
-                activeTab === 'log'
-                  ? 'Search receive log, PR, CMG project code'
-                  : 'Search receive no, PR, vendor, CMG project code'
-              }
-            />
-          </>
-        )}
-      />
+      <div className={styles.toolbar}>
+        <input
+          ref={importInputRef}
+          className={styles.hiddenFileInput}
+          type="file"
+          accept=".csv,text/csv"
+          onChange={handleImportFileChange}
+        />
+        <button type="button" className={styles.headerButton} onClick={downloadStockCsvTemplate}>
+          <Download size={16} />
+          Download template
+        </button>
+        <button
+          type="button"
+          className={`${styles.headerButton} ${styles.importButton}`}
+          disabled={!activeProjectNo || !canApproveReceipt}
+          title={!activeProjectNo ? 'กรุณาเลือกโครงการก่อนนำเข้า' : undefined}
+          onClick={() => importInputRef.current?.click()}
+        >
+          <FileUp size={16} />
+          Import CSV
+        </button>
+        <SearchField
+          value={query}
+          onChange={setQuery}
+          placeholder={
+            activeTab === 'log'
+              ? 'Search receive log, PR, CMG project code'
+              : 'Search receive no, PR, vendor, CMG project code'
+          }
+        />
+      </div>
 
       {importMessage ? <div className={styles.successNotice}>{importMessage}</div> : null}
 
@@ -861,7 +858,7 @@ export function ReceivingPage() {
                     {group.items.map((record) => (
                       <tr
                         key={record.id}
-                        className={styles.clickableRow}
+                        className={`${styles.clickableRow} ${styles.actionRequiredRow}`}
                         onClick={() => openIncomingDispatchDetail(record)}
                       >
                         <td>
@@ -1055,14 +1052,26 @@ export function ReceivingPage() {
             </div>
 
             <div className={styles.modalBody}>
-              <div className={styles.detailHero}>
+              <div className={`${styles.detailHero} ${styles.requestDetailHero}`}>
                 <div className={styles.modalInfo}>
                   <span>Request ID</span>
                   <strong>{receivingRequest.id}</strong>
                 </div>
                 <div className={styles.modalInfo}>
+                  <span>เลขที่ PO</span>
+                  <strong>{receivingRequest.poNo || '-'}</strong>
+                </div>
+                <div className={styles.modalInfo}>
                   <span>Project</span>
                   <strong>{getRequestProjectCode(receivingRequest) || '-'}</strong>
+                </div>
+                <div className={styles.modalInfo}>
+                  <span>วันที่รับของ</span>
+                  <strong>{formatDateTime(receivingRequest.receiveDate)}</strong>
+                </div>
+                <div className={styles.modalInfo}>
+                  <span>ผู้รับของ</span>
+                  <strong>{receivingRequest.receiveName || '-'}</strong>
                 </div>
               </div>
 
@@ -1071,6 +1080,7 @@ export function ReceivingPage() {
                 <div className={styles.detailItemsTable}>
                   <div className={`${styles.receiveFormHead} ${styles.requestReceiveFormHead}`}>
                     <span>รหัสสินค้า</span>
+                    <span>เลขที่ PO</span>
                     <span>รายการ</span>
                     <span className={styles.numericCell}>จำนวนที่ขอ</span>
                     <span className={styles.numericCell}>จำนวนรับเข้า</span>
@@ -1084,7 +1094,8 @@ export function ReceivingPage() {
                       return (
                       <div key={`${receivingRequest.id}-${itemIndex}`} className={`${styles.receiveFormRow} ${styles.requestReceiveFormRow}`}>
                         <span>{item.itemNo || '-'}</span>
-                        <span>
+                        <span>{receivingRequest.poNo || '-'}</span>
+                        <span className={styles.itemDescriptionInline}>
                           {item.itemDescription || '-'}
                           {item.unit ? <small>{item.unit}</small> : null}
                         </span>

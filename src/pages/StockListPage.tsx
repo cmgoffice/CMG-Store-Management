@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight } from 'lucide-react';
-import { Fragment, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
 import { SearchField } from '../components/SearchField';
@@ -44,6 +44,7 @@ type AggregatedInventoryItem = {
 };
 
 const UNASSIGNED_PROJECT_NO = 'Unassigned';
+const PAGE_SIZE_OPTIONS = [100, 200, 500] as const;
 
 function normalizeLookupKey(value: unknown) {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -158,6 +159,8 @@ export function StockListPage() {
   const [searchParams] = useSearchParams();
   const selectedItemType = getItemTypeOption(searchParams.get('itemType') ?? '')?.code ?? '';
   const [expandedItemIds, setExpandedItemIds] = useState<string[]>([]);
+  const [pageSize, setPageSize] = useState<(typeof PAGE_SIZE_OPTIONS)[number]>(100);
+  const [currentPage, setCurrentPage] = useState(1);
   const categoryFilteredStockItems = useMemo(
     () => stockItems.filter((item) => matchesItemType(item, selectedItemType)),
     [selectedItemType, stockItems]
@@ -402,6 +405,30 @@ export function StockListPage() {
       });
   }, [categoryFilteredStockItems, projectByNo, projectOrder, query, receivingRequests]);
 
+  const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const paginatedItems = useMemo(
+    () => filteredItems.slice((safeCurrentPage - 1) * pageSize, safeCurrentPage * pageSize),
+    [filteredItems, pageSize, safeCurrentPage]
+  );
+  const firstVisibleItem = filteredItems.length === 0 ? 0 : (safeCurrentPage - 1) * pageSize + 1;
+  const lastVisibleItem = Math.min(safeCurrentPage * pageSize, filteredItems.length);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [query, selectedItemType]);
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, totalPages));
+  }, [totalPages]);
+
+  const handlePageSizeChange = (nextPageSize: number) => {
+    if (PAGE_SIZE_OPTIONS.includes(nextPageSize as (typeof PAGE_SIZE_OPTIONS)[number])) {
+      setPageSize(nextPageSize as (typeof PAGE_SIZE_OPTIONS)[number]);
+      setCurrentPage(1);
+    }
+  };
+
   const handleToggleExpand = (itemId: string) => {
     setExpandedItemIds((current) =>
       current.includes(itemId)
@@ -440,7 +467,7 @@ export function StockListPage() {
             </tr>
           </thead>
           <tbody>
-            {filteredItems.map((item, index) => {
+            {paginatedItems.map((item, index) => {
               const isExpanded = expandedItemIds.includes(item.id);
 
               return (
@@ -449,7 +476,7 @@ export function StockListPage() {
                     className={styles.expandableRow}
                     onClick={() => handleToggleExpand(item.id)}
                   >
-                    <td className={styles.noColumn}>{index + 1}</td>
+                    <td className={styles.noColumn}>{(safeCurrentPage - 1) * pageSize + index + 1}</td>
                     <td className={styles.itemSummaryCell}>
                       <button
                         type="button"
@@ -539,6 +566,49 @@ export function StockListPage() {
             )}
           </tbody>
         </table>
+      </div>
+
+      <div className={styles.pagination}>
+        <div className={styles.paginationSummary}>
+          แสดง {firstVisibleItem.toLocaleString()}-{lastVisibleItem.toLocaleString()} จาก{' '}
+          {filteredItems.length.toLocaleString()} รายการ
+        </div>
+        <div className={styles.paginationActions}>
+          <label className={styles.pageSizeControl}>
+            <span>รายการต่อหน้า</span>
+            <select
+              className={styles.select}
+              value={pageSize}
+              onChange={(event) => handlePageSizeChange(Number(event.target.value))}
+              aria-label="จำนวนรายการต่อหน้า"
+            >
+              {PAGE_SIZE_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            className={styles.paginationButton}
+            onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+            disabled={safeCurrentPage === 1}
+          >
+            ก่อนหน้า
+          </button>
+          <span className={styles.paginationPage}>
+            หน้า {safeCurrentPage.toLocaleString()} / {totalPages.toLocaleString()}
+          </span>
+          <button
+            type="button"
+            className={styles.paginationButton}
+            onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+            disabled={safeCurrentPage === totalPages}
+          >
+            ถัดไป
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -17,23 +17,24 @@ import {
   ShieldCheck,
   ArrowLeftRight,
   ClipboardX,
+  History,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useInventory } from '../context/InventoryContext';
 import { useAuth } from '../context/AuthContext';
 import { useRole } from '../context/RoleContext';
-import { db } from '../firebase';
-import { collection, query, where, onSnapshot } from 'firebase/firestore';
+import type { PendingTask } from '../hooks/usePendingTasks';
 import styles from './Sidebar.module.css';
 
-type ActionMenuKey = 'receiving' | 'dispatch' | 'withdraw' | 'cancellation';
+type ActionMenuKey = 'receiving' | 'dispatch' | 'withdraw' | 'projectBorrow' | 'cancellation';
 
 interface SidebarProps {
   isOpen: boolean;
   onClose: () => void;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
+  pendingTasks: PendingTask[];
 }
 
 const groups = [
@@ -61,11 +62,16 @@ const groups = [
       { to: '/receiving', label: 'รับสินค้า', icon: ClipboardCheck, actionKey: 'receiving' as const },
       { to: '/store/store', label: 'คลังโครงการ', icon: Store },
       { to: '/store/withdraw', label: 'เบิกสินค้า', icon: PackageMinus, actionKey: 'withdraw' as const },
-      { to: '/store/project-borrow', label: 'ยืม-คืนระหว่างโครงการ', icon: ArrowLeftRight },
+      { to: '/store/project-borrow', label: 'ยืม-คืนระหว่างโครงการ', icon: ArrowLeftRight, actionKey: 'projectBorrow' as const },
       { to: '/store/dispatch', label: 'จัดส่งสินค้า', icon: SendToBack, actionKey: 'dispatch' as const },
       { to: '/cancellations', label: 'ยกเลิกรายการ', icon: ClipboardX, actionKey: 'cancellation' as const },
     ],
   },
+];
+
+const settingsItems = [
+  { to: '/admin', label: 'จัดการผู้ใช้', icon: ShieldCheck },
+  { to: '/activity-logs', label: 'ประวัติกิจกรรม', icon: History },
 ];
 
 function getMiniProjectLabel(projectNo: string) {
@@ -75,15 +81,6 @@ function getMiniProjectLabel(projectNo: string) {
 
 function formatBadgeCount(count: number) {
   return count > 99 ? '99+' : String(count);
-}
-
-function isWithdrawOverdue(dueDate?: string) {
-  if (!dueDate) {
-    return false;
-  }
-
-  const parsedDueDate = new Date(dueDate.includes('T') ? dueDate : `${dueDate}T23:59:59`);
-  return Number.isFinite(parsedDueDate.getTime()) && parsedDueDate.getTime() < Date.now();
 }
 
 function normalizeProjectNoText(value?: string) {
@@ -109,19 +106,15 @@ function isPriorityProject(projectNo: string) {
   return normalizeProjectNoText(projectNo) === 'J2B';
 }
 
-export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: SidebarProps) {
+export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse, pendingTasks }: SidebarProps) {
   const {
     projects,
     activeProjects,
     activeProjectNo,
     setActiveProjectNo,
-    stockItems,
-    receivingRequests,
-    withdrawRecords,
-    cancellationRequests,
   } = useInventory();
   const { userProfile, logout } = useAuth();
-  const { roleLabel, hasRole, hasAnyRole, canDispatch } = useRole();
+  const { roleLabel, hasRole, hasAnyRole } = useRole();
   const navigate = useNavigate();
   const canManageProjects = hasRole('MasterAdmin');
   const canAccessDispatch = hasAnyRole([
@@ -172,7 +165,7 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
   const projectActionBadges = useMemo<Record<string, number>>(() => {
     const counts = new Map<string, number>();
 
-    const increment = (projectNo: string) => {
+    const increment = (projectNo?: string) => {
       const normalizedProjectNo = normalizeProjectNoText(projectNo);
       if (!normalizedProjectNo) {
         return;
@@ -181,123 +174,47 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
       counts.set(normalizedProjectNo, (counts.get(normalizedProjectNo) ?? 0) + 1);
     };
 
-    receivingRequests.forEach((request) => {
-      const projectCode = normalizeProjectNoText(
-        request.cmgProjectCode ||
-          request.projectItemCode ||
-          request.projectNo ||
-          request.projectId ||
-          request.projectName ||
-          request.location
-      );
-
-      if (request.requestStatus === 'pending') {
-        increment(projectCode);
-      }
-    });
-
-    stockItems.forEach((item) => {
-      const projectCode = normalizeProjectNoText(
-        item.cmgProjectCode ||
-          item.projectId ||
-          item.purchasedForProject ||
-          item.location
-      );
-
-      if (item.status === 'In Transit') {
-        increment(projectCode);
-      }
-
-      if (
-        canDispatch &&
-        item.status === 'Pending Dispatch'
-      ) {
-        increment(projectCode);
-      }
-    });
-
-    withdrawRecords.forEach((record) => {
-      if (record.type === 'borrow' && record.status !== 'Returned') {
-        increment(record.projectNo);
-      }
-    });
+    pendingTasks.forEach((task) => increment(task.projectNo));
 
     return Object.fromEntries(counts);
-  }, [canDispatch, receivingRequests, stockItems, withdrawRecords]);
+  }, [pendingTasks]);
 
   const actionBadges = useMemo<Record<ActionMenuKey, { count: number; title: string }>>(() => {
     const isForActiveProject = (projectCode: string) =>
       !normalizedActiveProjectNo || projectCode === normalizedActiveProjectNo;
 
-    const pendingReceivingCount = receivingRequests.filter((request) => {
-      const projectCode = normalizeProjectNoText(
-        request.cmgProjectCode ||
-          request.projectItemCode ||
-          request.projectNo ||
-          request.projectId ||
-          request.projectName ||
-          request.location
-      );
-      return request.requestStatus === 'pending' && isForActiveProject(projectCode);
-    }).length;
-
-    const incomingItemsCount = stockItems.filter((item) => {
-      const projectCode = normalizeProjectNoText(
-        item.cmgProjectCode ||
-          item.projectId ||
-          item.purchasedForProject ||
-          item.location
-      );
-      return item.status === 'In Transit' && isForActiveProject(projectCode);
-    }).length;
-
-    const dispatchableCount = canDispatch
-      ? stockItems.filter(
-        (item) =>
-          item.status === 'Pending Dispatch' &&
-          item.location === 'Store Center' &&
-          item.purchasedForProject === `Project ${activeProjectNo}`
-      ).length
-      : 0;
-
-    const waitingWithdrawReturnCount = withdrawRecords.filter((record) => {
-      const projectCode = normalizeProjectNoText(record.projectNo);
-      return record.type === 'borrow' && record.status !== 'Returned' && isForActiveProject(projectCode);
-    }).length;
-
-    const overdueWithdrawReturnCount = withdrawRecords.filter((record) => {
-      const projectCode = normalizeProjectNoText(record.projectNo);
-      return (
-        record.type === 'borrow' &&
-        record.status !== 'Returned' &&
-        isForActiveProject(projectCode) &&
-        isWithdrawOverdue(record.dueDate)
-      );
-    }).length;
+    const getCount = (type: PendingTask['type']) => pendingTasks.filter((task) =>
+      task.type === type && (!task.projectNo || isForActiveProject(normalizeProjectNoText(task.projectNo)))
+    ).length;
+    const receivingCount = getCount('receiving');
+    const dispatchCount = getCount('dispatch');
+    const withdrawCount = getCount('withdraw');
+    const projectBorrowCount = getCount('projectBorrow');
+    const cancellationCount = getCount('cancellation');
 
     return {
       receiving: {
-        count: pendingReceivingCount + incomingItemsCount,
-        title: `Receiving รอ Action ${pendingReceivingCount + incomingItemsCount} รายการ: รับเข้าใหม่ ${pendingReceivingCount}, ย้ายโครงการ ${incomingItemsCount}`,
+        count: receivingCount,
+        title: `รับสินค้า รอ Action ${receivingCount} รายการ`,
       },
       withdraw: {
-        count: waitingWithdrawReturnCount,
-        title: `Withdraw waiting return ${waitingWithdrawReturnCount} records, overdue ${overdueWithdrawReturnCount}`,
+        count: withdrawCount,
+        title: `เบิกสินค้า รอคืน ${withdrawCount} รายการ`,
+      },
+      projectBorrow: {
+        count: projectBorrowCount,
+        title: `ยืม-คืนระหว่างโครงการ รอ Action ${projectBorrowCount} รายการ`,
       },
       dispatch: {
-        count: dispatchableCount,
-        title: `Dispatch รอ Action ${dispatchableCount} รายการ`,
+        count: dispatchCount,
+        title: `จัดส่งสินค้า รอ Action ${dispatchCount} รายการ`,
       },
       cancellation: {
-        count: cancellationRequests.filter((request) => request.status === 'Pending Approval' && (
-          !normalizedActiveProjectNo || request.projectNos.some((projectNo) => isForActiveProject(normalizeProjectNoText(projectNo)))
-        )).length,
-        title: `คำขอยกเลิกรออนุมัติ ${cancellationRequests.filter((request) => request.status === 'Pending Approval').length} รายการ`,
+        count: cancellationCount,
+        title: `คำขอยกเลิกรออนุมัติ ${cancellationCount} รายการ`,
       },
     };
-  }, [activeProjectNo, canDispatch, cancellationRequests, normalizedActiveProjectNo, receivingRequests, stockItems, withdrawRecords]);
-
-  const [pendingCount, setPendingCount] = useState(0);
+  }, [normalizedActiveProjectNo, pendingTasks]);
 
   const renderMiniProjectButton = (project: typeof activeProjects[number], index: number) => {
     const badgeCount = projectActionBadges[normalizeProjectNoText(project.projectNo)] ?? 0;
@@ -330,28 +247,12 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
     );
   };
 
-  useEffect(() => {
-    if (!userProfile || !userProfile.role.includes('MasterAdmin')) {
-      setPendingCount(0);
-      return;
-    }
-
-    const usersCol = collection(db, 'CMG-Store-Management', 'root', 'users');
-    const q = query(usersCol, where('status', '==', 'pending'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setPendingCount(snapshot.size);
-    }, (error) => {
-      console.error('Failed to listen to pending users count:', error);
-    });
-
-    return () => unsubscribe();
-  }, [userProfile]);
-
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
-    Overview: true,
-    Project: true,
-    Inventory: true,
-    Stock: true,
+    โครงการ: false,
+    ภาพรวม: false,
+    สินค้าคงคลัง: true,
+    คลังสินค้า: true,
+    ตั้งค่า: false,
   });
 
   useEffect(() => {
@@ -371,6 +272,15 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
     }
   }, [location.pathname]);
 
+  useEffect(() => {
+    if (settingsItems.some((item) => location.pathname.startsWith(item.to))) {
+      setOpenGroups((prev) => ({
+        ...prev,
+        ตั้งค่า: true,
+      }));
+    }
+  }, [location.pathname]);
+
   const toggleGroup = (groupLabel: string) => {
     setOpenGroups((prev) => ({
       ...prev,
@@ -384,15 +294,6 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
         <div
           className={styles.miniRail}
           aria-label="ตัวเลือกเปลี่ยนโครงการด่วน"
-          role="button"
-          tabIndex={0}
-          onClick={onToggleCollapse}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              e.preventDefault();
-              onToggleCollapse();
-            }
-          }}
         >
           <div className={styles.verticalBrand}>CMG.</div>
           <div className={styles.projectStack}>
@@ -546,30 +447,48 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse }: Side
           </nav>
 
           <div className={styles.bottomNav}>
-            {isMasterAdmin && (
-              <NavLink
-                className={({ isActive }) => `${styles.link} ${isActive ? styles.active : ''}`}
-                to="/admin"
-                onClick={onClose}
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', paddingRight: '16px' }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                  <ShieldCheck size={20} />
-                  <span>จัดการผู้ใช้</span>
-                </div>
-                {pendingCount > 0 && (
-                  <span className={styles.pendingBadge}>
-                    {pendingCount}
-                  </span>
-                )}
-              </NavLink>
-            )}
-            {canManageProjects && (
-              <NavLink className={styles.link} to="/projects" onClick={onClose}>
-                <Settings size={20} />
-                <span>ตั้งค่า</span>
-              </NavLink>
-            )}
+            {isMasterAdmin && (() => {
+              const isSettingsExpanded = !!openGroups['ตั้งค่า'];
+              const isSettingsActive = settingsItems.some((item) => location.pathname.startsWith(item.to));
+
+              return (
+                <section className={styles.bottomGroup}>
+                  <button
+                    type="button"
+                    className={`${styles.groupHeader} ${isSettingsActive ? styles.groupHeaderActive : ''}`}
+                    onClick={() => toggleGroup('ตั้งค่า')}
+                    aria-expanded={isSettingsExpanded}
+                  >
+                    <Settings size={18} className={styles.groupIcon} />
+                    <span className={styles.groupTitle}>ตั้งค่า</span>
+                    <ChevronDown
+                      size={14}
+                      className={`${styles.chevron} ${isSettingsExpanded ? styles.chevronExpanded : ''}`}
+                    />
+                  </button>
+                  <div className={`${styles.itemsContainer} ${isSettingsExpanded ? styles.itemsExpanded : ''}`}>
+                    <div className={styles.itemsInner}>
+                      {settingsItems.map((item) => (
+                        <NavLink
+                          key={item.to}
+                          to={item.to}
+                          className={({ isActive }) => `${styles.link} ${isActive ? styles.active : ''}`}
+                          onClick={onClose}
+                        >
+                          <item.icon size={16} />
+                          <span className={styles.linkText}>{item.label}</span>
+                          {item.to === '/admin' && pendingTasks.filter((task) => task.type === 'admin').length > 0 ? (
+                            <span className={styles.menuBadge}>
+                              {formatBadgeCount(pendingTasks.filter((task) => task.type === 'admin').length)}
+                            </span>
+                          ) : null}
+                        </NavLink>
+                      ))}
+                    </div>
+                  </div>
+                </section>
+              );
+            })()}
             <button
               className={styles.logout}
               type="button"

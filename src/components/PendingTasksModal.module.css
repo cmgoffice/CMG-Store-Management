@@ -1,0 +1,248 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgb(20 27 43 / 62%);
+  backdrop-filter: blur(5px);
+}
+
+.modal {
+  position: relative;
+  width: min(620px, 100%);
+  max-height: min(78vh, 680px);
+  overflow: hidden;
+  border: 2px solid #ff9a3d;
+  border-radius: 22px;
+  background: #fff;
+  box-shadow: 0 0 0 6px rgb(255 122 0 / 12%), 0 32px 100px rgb(30 24 76 / 40%);
+  animation: pendingModalEntrance 260ms ease-out both;
+}
+
+.modal::before {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 5px;
+  background: linear-gradient(90deg, #ff7a00, #ffb347, #ff7a00);
+  content: '';
+}
+
+@keyframes pendingModalEntrance {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.97);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 25px 22px 18px;
+  border-bottom: 1px solid #f0edf8;
+  background: linear-gradient(135deg, #fff3e3 0%, #fffaf5 52%, #faf8ff 100%);
+}
+
+.titleWrap {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.icon {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  place-items: center;
+  border: 1px solid #ffc078;
+  border-radius: 15px;
+  background: #fff0d9;
+  color: #e66c00;
+  box-shadow: 0 0 0 6px rgb(255 122 0 / 10%);
+  animation: pendingBellPulse 1.8s ease-in-out infinite;
+}
+
+@keyframes pendingBellPulse {
+  0%,
+  100% { box-shadow: 0 0 0 6px rgb(255 122 0 / 10%); }
+  50% { box-shadow: 0 0 0 10px rgb(255 122 0 / 0%); }
+}
+
+.header h2 {
+  margin: 0;
+  color: #2b2935;
+  font-size: 20px;
+  font-weight: 900;
+}
+
+.header p {
+  margin: 4px 0 0;
+  color: #817b91;
+  font-size: 11px;
+}
+
+.closeButton {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 10px;
+  background: #f1eff9;
+  color: #716a83;
+  cursor: pointer;
+}
+
+.list {
+  max-height: 500px;
+  overflow-y: auto;
+  padding: 12px;
+  background: #fffdfb;
+}
+
+.task {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+  padding: 14px 12px;
+  border: 1px solid #ffe0b8;
+  border-left: 5px solid #ff8a1c;
+  border-radius: 12px;
+  background: #fff8ee;
+  color: #2b2935;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: 0 5px 14px rgb(255 122 0 / 8%);
+}
+
+.task:last-child {
+  margin-bottom: 0;
+}
+
+.task:hover,
+.task:focus-visible {
+  border-color: #ffb35c;
+  background: #fff0d9;
+  outline: none;
+}
+
+.taskDot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #ff7a00;
+  box-shadow: 0 0 0 5px rgb(255 122 0 / 12%);
+  animation: pendingDotPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pendingDotPulse {
+  0%,
+  100% { box-shadow: 0 0 0 5px rgb(255 122 0 / 12%); }
+  50% { box-shadow: 0 0 0 8px rgb(255 122 0 / 0%); }
+}
+
+.taskText {
+  min-width: 0;
+  flex: 1;
+}
+
+.taskText strong,
+.taskText small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.taskText strong {
+  color: #9a4b00;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.taskText small {
+  margin-top: 4px;
+  color: #847e92;
+  font-size: 10px;
+}
+
+.taskArrow {
+  flex: 0 0 auto;
+  color: #e66c00;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 13px 18px 16px;
+  border-top: 1px solid #f0edf8;
+  background: #faf9ff;
+}
+
+.dismissButton,
+.closeTextButton {
+  min-height: 38px;
+  padding: 0 12px;
+  border-radius: 9px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.dismissButton {
+  border: 1px solid #ff9a3d;
+  background: #ff7a00;
+  color: #fff;
+  box-shadow: 0 6px 14px rgb(255 122 0 / 20%);
+}
+
+.closeTextButton {
+  border: 1px solid #ddd8ee;
+  background: #fff;
+  color: #6f6881;
+}
+
+@media (max-width: 560px) {
+  .overlay {
+    align-items: end;
+    padding: 10px;
+  }
+
+  .modal {
+    border-radius: 18px;
+  }
+
+  .taskArrow {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal,
+  .icon,
+  .taskDot {
+    animation: none;
+  }
+}

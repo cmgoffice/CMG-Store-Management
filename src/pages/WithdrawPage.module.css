@@ -86,6 +86,14 @@
   opacity: 0.65;
 }
 
+.toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 .iconButton {
   width: 38px;
   height: 38px;
@@ -248,12 +256,40 @@
 }
 
 .withdrawTable td {
+  vertical-align: top;
   white-space: nowrap;
 }
 
+.withdrawTable th:nth-child(2),
+.withdrawTable td:nth-child(2),
+.withdrawTable th:nth-child(3),
+.withdrawTable td:nth-child(3) {
+  width: 110px;
+  max-width: 110px;
+}
+
+.withdrawTable td:nth-child(3) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.withdrawRowStart td {
+  border-top-color: #cbd8ea;
+}
+
+.withdrawTable td[rowspan] {
+  background: #fbfdff;
+}
+
+.withdrawItemCell {
+  min-width: 260px;
+  white-space: normal !important;
+  word-break: break-word;
+}
+
+.withdrawTable td:nth-child(3) .stackCell span,
 .withdrawTable td:nth-child(4) .stackCell span,
-.withdrawTable td:nth-child(5) .stackCell span,
-.withdrawTable td:nth-child(9) .stackCell span,
+.withdrawTable td:nth-child(8) .stackCell span,
 .withdrawTable .subText {
   display: none;
 }
@@ -380,6 +416,16 @@
   box-shadow: 0 30px 80px rgb(17 40 68 / 24%);
 }
 
+.modalIssue {
+  border-color: #93c5fd;
+  background: linear-gradient(180deg, #eff6ff 0%, #f8fbff 48%, #fff 100%);
+}
+
+.modalBorrow {
+  border-color: #86efac;
+  background: linear-gradient(180deg, #f0fdf4 0%, #f7fdf8 48%, #fff 100%);
+}
+
 .modalHeader,
 .modalFooter {
   display: flex;
@@ -391,6 +437,14 @@
 
 .modalHeader {
   border-bottom: 1px solid #e7eef9;
+}
+
+.modalIssue .modalHeader {
+  border-bottom-color: #bfdbfe;
+}
+
+.modalBorrow .modalHeader {
+  border-bottom-color: #bbf7d0;
 }
 
 .modalHeader h3 {
@@ -416,6 +470,16 @@
 .modalFooter {
   border-top: 1px solid #e7eef9;
   background: #f9fbff;
+}
+
+.modalIssue .modalFooter {
+  border-top-color: #bfdbfe;
+  background: #eff6ff;
+}
+
+.modalBorrow .modalFooter {
+  border-top-color: #bbf7d0;
+  background: #f0fdf4;
 }
 
 .modalInfo {
@@ -459,10 +523,34 @@
   font-weight: 800;
 }
 
+.segmentButtonIssue {
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #075985;
+}
+
+.segmentButtonBorrow {
+  border: 1px solid #bbf7d0;
+  background: #f0fdf4;
+  color: #166534;
+}
+
 .segmentButtonActive {
-  background: #fff;
-  color: #0b5cad;
   box-shadow: 0 12px 24px rgb(55 89 137 / 10%);
+}
+
+.segmentButtonIssue.segmentButtonActive {
+  border-color: #60a5fa;
+  background: #dbeafe;
+  color: #075985;
+  box-shadow: 0 12px 24px rgb(37 99 235 / 18%);
+}
+
+.segmentButtonBorrow.segmentButtonActive {
+  border-color: #4ade80;
+  background: #dcfce7;
+  color: #166534;
+  box-shadow: 0 12px 24px rgb(22 101 52 / 16%);
 }
 
 .formGrid {
@@ -539,6 +627,11 @@
   grid-template-columns: 150px minmax(0, 1fr) 110px 120px 64px;
   gap: 12px;
   align-items: center;
+}
+
+.selectedItemsTableIssue .selectedItemsHead,
+.selectedItemsTableIssue .selectedItemRow {
+  grid-template-columns: 150px minmax(150px, 1fr) 100px 120px minmax(180px, 1fr) 64px;
 }
 
 .selectedItemsHead {
@@ -759,6 +852,11 @@
     width: 100%;
   }
 
+  .toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .tabButton {
     flex: 1;
   }
@@ -768,6 +866,10 @@
   }
 
   .selectedItemRow {
+    grid-template-columns: 1fr;
+  }
+
+  .selectedItemsTableIssue .selectedItemRow {
     grid-template-columns: 1fr;
   }
 }

@@ -77,6 +77,7 @@ export function AdminPanel() {
   const [editProjects, setEditProjects] = useState<string[]>([]);
   const [editProjectRoles, setEditProjectRoles] = useState<Record<string, UserRole[]>>({});
   const [editStatus, setEditStatus] = useState<'pending' | 'approved' | 'rejected'>('pending');
+  const [updatingStatusEmail, setUpdatingStatusEmail] = useState<string | null>(null);
   const [isRoleDropdownOpen, setIsRoleDropdownOpen] = useState(false);
   const [openProjectRoleDropdown, setOpenProjectRoleDropdown] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -291,6 +292,23 @@ export function AdminPanel() {
     }
   };
 
+  const handleStatusChange = async (user: UserProfile, status: UserProfile['status']) => {
+    if (status === user.status) {
+      return;
+    }
+
+    setUpdatingStatusEmail(user.email);
+    try {
+      const userDocRef = doc(db, APP_NAME, 'root', 'users', user.email.toLowerCase());
+      await updateDoc(userDocRef, { status });
+    } catch (error) {
+      console.error('Failed to update user status:', error);
+      await showAlert('ไม่สามารถเปลี่ยนสถานะผู้ใช้ได้ กรุณาลองใหม่อีกครั้ง', { variant: 'error' });
+    } finally {
+      setUpdatingStatusEmail(null);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center min-h-[400px] text-[#4f2ed9]">
@@ -321,14 +339,15 @@ export function AdminPanel() {
             <col className="w-[72px]" />
             <col className="w-[280px]" />
             <col className="w-[120px]" />
-            <col className="w-[140px]" />
+            <col className="w-[150px]" />
             <col className="w-[170px]" />
-            <col className="w-[360px]" />
+            <col className="w-[115px]" />
+            <col className="w-[260px]" />
             <col className="w-[130px]" />
           </colgroup>
           <thead>
             <tr>
-              <th>โปรไฟล์</th><th>ชื่อและอีเมล</th><th>ตำแหน่ง</th><th>สถานะ</th><th>บทบาทส่วนกลาง</th><th>สิทธิ์และบทบาทโครงการ</th><th className="numeric">การดำเนินการ</th>
+              <th>โปรไฟล์</th><th>ชื่อและอีเมล</th><th>ตำแหน่ง</th><th>สถานะ</th><th>บทบาทส่วนกลาง</th><th>จำนวนโครงการ</th><th>สิทธิ์และบทบาทโครงการ</th><th className="numeric">การดำเนินการ</th>
             </tr>
           </thead>
           <tbody>
@@ -356,28 +375,23 @@ export function AdminPanel() {
                 </td>
                 <td className="text-sm font-medium text-slate-600 leading-5">{user.position}</td>
                 <td>
-                  <span
-                    className={`inline-flex items-center gap-1.5 text-xs font-bold px-2.5 py-1 rounded-full border ${
+                  <select
+                    value={user.status}
+                    onChange={(event) => handleStatusChange(user, event.target.value as UserProfile['status'])}
+                    disabled={updatingStatusEmail === user.email}
+                    className={`h-8 min-w-[112px] rounded-full border px-2.5 text-[10px] font-bold uppercase tracking-wider outline-none transition-all disabled:cursor-wait disabled:opacity-60 ${
                       user.status === 'approved'
-                        ? 'bg-emerald-50 border-emerald-200 text-emerald-700'
+                        ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
                         : user.status === 'rejected'
-                        ? 'bg-rose-50 border-rose-200 text-rose-700'
-                        : 'bg-amber-50 border-amber-200 text-amber-700'
+                        ? 'border-rose-200 bg-rose-50 text-rose-700'
+                        : 'border-amber-200 bg-amber-50 text-amber-700'
                     }`}
+                    aria-label={`สถานะของ ${user.firstName} ${user.lastName}`}
                   >
-                    <span
-                      className={`w-1.5 h-1.5 rounded-full ${
-                        user.status === 'approved'
-                          ? 'bg-emerald-500'
-                          : user.status === 'rejected'
-                          ? 'bg-rose-500'
-                          : 'bg-amber-500 animate-pulse'
-                      }`}
-                    />
-                    <span className="uppercase tracking-wider text-[10px]">
-                      {user.status}
-                    </span>
-                  </span>
+                    <option value="pending">PENDING</option>
+                    <option value="approved">APPROVED</option>
+                    <option value="rejected">REJECTED</option>
+                  </select>
                 </td>
                 <td>
                   <div className="flex flex-wrap gap-1">
@@ -392,36 +406,36 @@ export function AdminPanel() {
                   </div>
                 </td>
                 <td>
-                  <div className="flex min-h-[40px] w-full items-center">
-                    {user.role.includes('MasterAdmin') ? (
-                      <div className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2.5 py-1">
-                        <span className="whitespace-nowrap text-[10px] font-bold italic leading-4 text-slate-500">
-                          All Projects & MasterAdmin permissions
-                        </span>
-                      </div>
-                    ) : user.assignedProjects && user.assignedProjects.length > 0 ? (
-                      <div className="flex flex-nowrap items-center gap-1 overflow-hidden whitespace-nowrap">
-                        {user.assignedProjects.map((pNo) => {
-                          const shortProjectNo = getShortProjectNo(pNo);
-                          return (
-                            <div
-                              key={pNo}
-                              className="inline-flex shrink-0 items-center rounded-full border border-slate-200/80 bg-white px-2.5 py-1 text-[10px] font-bold text-slate-700"
-                              title={shortProjectNo}
-                            >
-                              {shortProjectNo}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <div className="inline-flex items-center rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1">
-                        <span className="whitespace-nowrap text-[10px] font-bold leading-4 text-amber-600">
-                          No Projects Assigned
-                        </span>
-                      </div>
-                    )}
-                  </div>
+                  <span className="inline-flex min-w-[72px] items-center justify-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-[10px] font-black text-slate-700">
+                    {user.role.includes('MasterAdmin') ? 'ทั้งหมด' : `${user.assignedProjects?.length || 0} โครงการ`}
+                  </span>
+                </td>
+                <td>
+                  {user.role.includes('MasterAdmin') ? (
+                    <div className="inline-flex items-center rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-[10px] font-bold italic text-slate-500">
+                      All Projects & MasterAdmin permissions
+                    </div>
+                  ) : user.assignedProjects && user.assignedProjects.length > 0 ? (
+                    <select
+                      defaultValue=""
+                      className="h-8 w-full max-w-[245px] rounded-lg border border-slate-200 bg-white px-2.5 text-[10px] font-bold text-slate-700 outline-none transition-all hover:border-purple-300 focus:border-purple-400 focus:ring-2 focus:ring-purple-100"
+                      aria-label={`สิทธิ์และบทบาทโครงการของ ${user.firstName} ${user.lastName}`}
+                    >
+                      <option value="">เลือกดูโครงการและบทบาท...</option>
+                      {user.assignedProjects.map((pNo) => {
+                        const projectRoles = sanitizeProjectRoles(user.projectRoles)[pNo] || [];
+                        return (
+                          <option key={pNo} value={pNo}>
+                            {getShortProjectNo(pNo)} — {projectRoles.length > 0 ? projectRoles.join(', ') : 'ไม่ระบุบทบาท'}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  ) : (
+                    <span className="inline-flex items-center rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[10px] font-bold text-amber-600">
+                      No Projects Assigned
+                    </span>
+                  )}
                 </td>
                 <td className="numeric">
                   <div className="flex justify-end gap-1.5">
@@ -449,7 +463,7 @@ export function AdminPanel() {
             ))}
             {filteredUsers.length === 0 && (
               <tr>
-                <td colSpan={7} className="text-center py-8 text-slate-400 font-semibold text-sm">
+                <td colSpan={8} className="text-center py-8 text-slate-400 font-semibold text-sm">
                   No users found matching query.
                 </td>
               </tr>

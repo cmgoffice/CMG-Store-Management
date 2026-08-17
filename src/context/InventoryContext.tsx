@@ -11,15 +11,17 @@ import {
   collection,
   doc,
   type DocumentData,
+  addDoc,
   runTransaction,
   setDoc,
   onSnapshot,
+  serverTimestamp,
 } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { APP_NAME } from '../config/firestore';
 import { db, masterDataDb, masterDataProjectsPath, storage } from '../firebase';
 import { processPrPoReceivePayload } from '../services/prPoReceiveIntegration';
-import { matchesItemType } from '../constants/itemTypes';
+import { matchesProjectBorrowItemType } from '../constants/itemTypes';
 import type {
   DispatchRecord,
   CancellationEntityType,
@@ -86,17 +88,23 @@ interface ImportStockInput {
   items: ImportStockLineInput[];
 }
 
+interface UpdateProjectStockItemInput {
+  projectNo: string;
+  stockItemIds: string[];
+  itemNo: string;
+  itemDescription: string;
+}
+
 interface CreateWithdrawLineInput {
   receiveNo: string;
   qty: number;
+  requesterName: string;
 }
 
 interface CreateWithdrawInput {
   projectNo: string;
   type: WithdrawType;
   items: CreateWithdrawLineInput[];
-  requesterName: string;
-  requesterPhone: string;
   withdrawDate: string;
   purpose: string;
   dueDate?: string;
@@ -153,6 +161,7 @@ interface InventoryContextValue {
   receiveDispatch: (dispatchId: string, receivedItems?: ReceiveDispatchLineInput[]) => Promise<void>;
   receiveNewItem: (item: StockItem) => Promise<void>;
   importStockItems: (input: ImportStockInput) => Promise<void>;
+  updateProjectStockItem: (input: UpdateProjectStockItemInput) => Promise<void>;
   deleteReceivingRequest: (requestId: string) => Promise<void>;
   receivePrPoPayload: (payload: PrPoReceivePayload) => Promise<PrPoReceiveResponse>;
   activeProjectNo: string;
@@ -289,6 +298,50 @@ function createReceivedBySnapshot(userProfile: ReturnType<typeof useAuth>['userP
     ),
     receivedByEmail: userProfile?.email ?? 'unknown@cmg.local',
   };
+}
+
+type InventoryActivityAction =
+  | 'TRANSFER_REQUEST'
+  | 'TRANSFER_APPROVE'
+  | 'TRANSFER_REJECT'
+  | 'TRANSFER_RETURN_REQUEST'
+  | 'TRANSFER_RETURN'
+  | 'DISPATCH'
+  | 'RECEIVE'
+  | 'RECEIVE_TRANSFER'
+  | 'RECEIVE_IMPORT'
+  | 'WITHDRAW'
+  | 'RECEIVE_RETURN'
+  | 'CANCEL'
+  | 'DELETE_ITEM'
+  | 'ADD_ITEM'
+  | 'EDIT_ITEM'
+  | 'EDIT_PROJECT_STATUS';
+
+async function logInventoryActivity(
+  action: InventoryActivityAction,
+  userProfile: ReturnType<typeof useAuth>['userProfile'],
+  details: Record<string, unknown> = {},
+) {
+  try {
+    await addDoc(collection(db, APP_NAME, 'root', 'activityLogs'), {
+      action,
+      email: userProfile?.email ?? 'unknown@cmg.local',
+      timestamp: serverTimestamp(),
+      details: {
+        ...Object.fromEntries(Object.entries(details).filter(([, value]) => value !== undefined)),
+        uid: userProfile?.uid ?? '',
+        userName: formatPersonName(
+          userProfile?.firstName,
+          userProfile?.lastName,
+          userProfile?.email ?? 'Unknown User',
+        ),
+      },
+    });
+  } catch (error) {
+    // Activity logging must never make a completed stock operation fail.
+    console.error('Failed to log inventory activity:', error);
+  }
 }
 
 function createDispatchNumber() {
@@ -727,6 +780,7 @@ function normalizeWithdrawRecord(data: DocumentData, fallbackId: string): Withdr
   const rawItems = parseReceivingItems(data.items);
   const projectNo = normalizeProjectNoText(data.projectNo);
   const withdrawNo = normalizeText(data.withdrawNo) || fallbackId;
+  const recordRequesterName = normalizeText(data.requesterName);
   const items = rawItems.map((item, index) => {
     const itemData = item as DocumentData;
     const stockItemSnapshot =
@@ -746,6 +800,7 @@ function normalizeWithdrawRecord(data: DocumentData, fallbackId: string): Withdr
       poNo: normalizeText(itemData.poNo) || stockItemSnapshot?.poNo || '',
       itemNo: normalizeText(itemData.itemNo) || stockItemSnapshot?.itemNo || stockItemId,
       itemDescription: normalizeText(itemData.itemDescription) || stockItemSnapshot?.itemDescription || '',
+      requesterName: normalizeText(itemData.requesterName) || recordRequesterName,
       qty: normalizeNumber(itemData.qty),
       returnedQty:
         itemData.returnedQty === undefined || itemData.returnedQty === null
@@ -768,7 +823,7 @@ function normalizeWithdrawRecord(data: DocumentData, fallbackId: string): Withdr
     projectName: normalizeText(data.projectName),
     type,
     status: normalizeWithdrawRecordStatus(data.status),
-    requesterName: normalizeText(data.requesterName),
+    requesterName: recordRequesterName || items[0]?.requesterName || '',
     requesterPhone: normalizeText(data.requesterPhone),
     issuedByUid: normalizeText(data.issuedByUid),
     issuedByName: normalizeText(data.issuedByName),
@@ -1312,9 +1367,9 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       if (!sourceItem || getStockItemProjectNo(sourceItem) !== normalizedLenderProjectNo) {
         throw new Error('ไม่พบรายการ EQM ของโครงการผู้ให้ยืม กรุณารีเฟรชแล้วลองใหม่');
       }
-      const isEqm = matchesItemType(sourceItem, 'EQM');
-      if (!isEqm || !isStockItemAvailableForMovement(sourceItem) || line.qty > sourceItem.qty) {
-        throw new Error(`รายการ ${sourceItem.itemNo || sourceItem.receiveNo} ไม่ใช่ EQM ที่พร้อมให้ยืม หรือจำนวนไม่พอ`);
+      const isBorrowableProjectItem = matchesProjectBorrowItemType(sourceItem);
+      if (!isBorrowableProjectItem || !isStockItemAvailableForMovement(sourceItem) || line.qty > sourceItem.qty) {
+        throw new Error(`รายการ ${sourceItem.itemNo || sourceItem.receiveNo} ไม่ใช่ EQM/นั่งร้าน/แบบเหล็กที่พร้อมให้ยืม หรือจำนวนไม่พอ`);
       }
       return { sourceItem, qty: line.qty };
     });
@@ -1354,6 +1409,13 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       createdAt,
     };
     await setDoc(doc(db, APP_NAME, 'root', 'projectBorrowRequests', requestNo), stripUndefined(request));
+    await logInventoryActivity('TRANSFER_REQUEST', userProfile, {
+      requestNo,
+      borrowerProjectNo: borrowerProject.projectNo,
+      lenderProjectNo: lenderProject.projectNo,
+      totalQty: request.totalQty,
+      itemCount: request.items.length,
+    });
   }, [items, projectList, userProfile]);
 
   const getProjectBorrowApprover = useCallback((request: ProjectBorrowRequest) => {
@@ -1391,6 +1453,11 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         approvedByName: approverName,
       }), { merge: true });
     });
+    await logInventoryActivity('TRANSFER_APPROVE', userProfile, {
+      requestNo: target.requestNo,
+      borrowerProjectNo: target.borrowerProjectNo,
+      lenderProjectNo: target.lenderProjectNo,
+    });
   }, [getProjectBorrowApprover, userProfile, visibleProjectBorrowRequests]);
 
   const rejectProjectBorrowRequest = useCallback(async (requestId: string) => {
@@ -1404,6 +1471,11 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       rejectedByUid: userProfile?.uid ?? '',
       rejectedByName: formatPersonName(userProfile?.firstName, userProfile?.lastName, userProfile?.email ?? 'Approver'),
     }, { merge: true });
+    await logInventoryActivity('TRANSFER_REJECT', userProfile, {
+      requestNo: target.requestNo,
+      borrowerProjectNo: target.borrowerProjectNo,
+      lenderProjectNo: target.lenderProjectNo,
+    });
   }, [getProjectBorrowApprover, userProfile, visibleProjectBorrowRequests]);
 
   const requestProjectBorrowReturn = useCallback(async (requestId: string) => {
@@ -1418,6 +1490,11 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       returnRequestedByUid: userProfile?.uid ?? '',
       returnRequestedByName: formatPersonName(userProfile?.firstName, userProfile?.lastName, userProfile?.email ?? 'User'),
     }, { merge: true });
+    await logInventoryActivity('TRANSFER_RETURN_REQUEST', userProfile, {
+      requestNo: target.requestNo,
+      borrowerProjectNo: target.borrowerProjectNo,
+      lenderProjectNo: target.lenderProjectNo,
+    });
   }, [userProfile, visibleProjectBorrowRequests]);
 
   const completeProjectBorrowReturn = useCallback(async (requestId: string) => {
@@ -1481,6 +1558,12 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         returnedByUid: userProfile?.uid ?? '',
         returnedByName: formatPersonName(userProfile?.firstName, userProfile?.lastName, userProfile?.email ?? 'Receiver'),
       }, { merge: true });
+    });
+    await logInventoryActivity('TRANSFER_RETURN', userProfile, {
+      requestNo: target.requestNo,
+      borrowerProjectNo: target.borrowerProjectNo,
+      lenderProjectNo: target.lenderProjectNo,
+      totalQty: target.totalQty,
     });
   }, [userProfile, visibleProjectBorrowRequests]);
 
@@ -1585,6 +1668,13 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     };
 
     await setDoc(doc(db, APP_NAME, 'root', 'cancellationRequests', cancellationNo), stripUndefined(request));
+    await logInventoryActivity('CANCEL', userProfile, {
+      cancellationNo,
+      entityType,
+      entityId,
+      referenceNo: target.referenceNo,
+      cancelQty,
+    });
   }, [activeProjectNo, cancellationRequestList, getCancellationTarget, userProfile]);
 
   const canApproveCancellation = useCallback((request: CancellationRequest) => {
@@ -1856,6 +1946,13 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         completedByEmail: approverEmail,
       }, { merge: true });
     });
+    await logInventoryActivity('DELETE_ITEM', userProfile, {
+      entityType: target.entityType,
+      entityId: target.entityId,
+      cancellationNo: target.cancellationNo,
+      referenceNo: target.referenceNo,
+      reason: target.reason,
+    });
   }, [canApproveCancellation, userProfile, visibleCancellationRequests]);
 
   const rejectCancellationRequest = useCallback(async (requestId: string, rejectionReason = '') => {
@@ -1870,6 +1967,12 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       rejectedByName: formatPersonName(userProfile?.firstName, userProfile?.lastName, userProfile?.email ?? 'Approver'),
       rejectedReason: rejectionReason.trim(),
     }, { merge: true });
+    await logInventoryActivity('CANCEL', userProfile, {
+      entityType: target.entityType,
+      entityId: target.entityId,
+      cancellationNo: target.cancellationNo,
+      rejected: true,
+    });
   }, [canApproveCancellation, userProfile, visibleCancellationRequests]);
 
   const createDispatch = useCallback(async ({
@@ -2101,6 +2204,13 @@ export function InventoryProvider({ children }: PropsWithChildren) {
 
       transaction.set(dispatchRef, stripUndefined(record));
     });
+    await logInventoryActivity('DISPATCH', userProfile, {
+      dispatchNo,
+      sourceProjectNo: sourceProject.projectNo,
+      destinationProjectNo: targetProject.projectNo,
+      totalQty: selectedItems.reduce((sum, { line }) => sum + line.qty, 0),
+      itemCount: selectedItems.length,
+    });
   }, [items, projectBorrowList, projectList, userProfile]);
 
   const cancelDispatch = useCallback(async (dispatchId: string) => {
@@ -2184,14 +2294,19 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         { merge: true }
       );
     });
+    await logInventoryActivity('DELETE_ITEM', userProfile, {
+      entityType: 'dispatch',
+      dispatchNo: target.dispatchNo,
+      sourceProjectNo: target.sourceProjectNo,
+      destinationProjectNo: target.destinationProjectNo,
+      reason: 'dispatch_cancelled',
+    });
   }, [dispatchList, userProfile]);
 
   const createWithdraw = useCallback(async ({
     projectNo,
     type,
     items: selectedLines,
-    requesterName,
-    requesterPhone,
     withdrawDate,
     purpose,
     dueDate,
@@ -2203,6 +2318,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       .map((line) => ({
         receiveNo: line.receiveNo,
         qty: Number(line.qty),
+        requesterName: normalizeText(line.requesterName),
       }))
       .filter((line) => line.receiveNo && Number.isFinite(line.qty) && line.qty > 0);
 
@@ -2213,14 +2329,6 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     const sourceProject = visibleProjects.find((project) => projectNoMatches(project.projectNo, normalizedProjectNo));
     if (!sourceProject) {
       throw new Error('You can create withdrawals only for projects assigned to your account.');
-    }
-
-    if (!requesterName.trim()) {
-      throw new Error('Please enter the requester or responsible person.');
-    }
-
-    if (!requesterPhone.trim()) {
-      throw new Error('Please enter the requester phone number.');
     }
 
     if (!withdrawDate.trim()) {
@@ -2237,6 +2345,10 @@ export function InventoryProvider({ children }: PropsWithChildren) {
 
     if (!normalizedLines.length) {
       throw new Error('Please select at least one item and enter withdraw qty greater than 0.');
+    }
+    const lineWithoutRequester = normalizedLines.find((line) => !line.requesterName);
+    if (lineWithoutRequester) {
+      throw new Error(`Please enter the requester or responsible person for item ${lineWithoutRequester.receiveNo}.`);
     }
     if (new Set(normalizedLines.map((line) => line.receiveNo)).size !== normalizedLines.length) {
       throw new Error('The same stock item cannot be added to one withdrawal more than once.');
@@ -2347,6 +2459,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
           poNo: sourceItem.poNo,
           itemNo: sourceItem.itemNo,
           itemDescription: sourceItem.itemDescription,
+          requesterName: line.requesterName,
           qty: line.qty,
           returnedQty: normalizedType === 'borrow' ? 0 : undefined,
           amount: withdrawAmount,
@@ -2365,8 +2478,8 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         projectName: sourceProject.projectName,
         type: normalizedType,
         status: normalizedType === 'borrow' ? 'Waiting Return' : 'Issued',
-        requesterName: requesterName.trim(),
-        requesterPhone: requesterPhone.trim(),
+        requesterName: withdrawSnapshots[0]?.requesterName || '',
+        requesterPhone: '',
         issuedByUid,
         issuedByName,
         issuedByEmail,
@@ -2381,6 +2494,13 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       };
 
       transaction.set(withdrawRef, stripUndefined(record));
+    });
+    await logInventoryActivity('WITHDRAW', userProfile, {
+      withdrawNo,
+      projectNo: sourceProject.projectNo,
+      type: normalizedType,
+      totalQty: selectedItems.reduce((sum, { line }) => sum + line.qty, 0),
+      itemCount: selectedItems.length,
     });
   }, [items, userProfile, visibleProjects]);
 
@@ -2499,9 +2619,18 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         { merge: true }
       );
     });
+    await logInventoryActivity('RECEIVE_RETURN', userProfile, {
+      withdrawNo: target.withdrawNo,
+      projectNo: target.projectNo,
+      totalQty: target.totalQty,
+    });
   }, [items, userProfile, withdrawList]);
 
   const cancelWithdraw = useCallback(async (withdrawId: string) => {
+    if (!userProfile?.role.includes('MasterAdmin')) {
+      throw new Error('เฉพาะ MasterAdmin เท่านั้นที่สามารถยกเลิกรายการเบิกได้');
+    }
+
     const target = withdrawList.find((record) => record.id === withdrawId);
 
     if (!target || target.status === 'Returned' || target.status === 'Cancelled') {
@@ -2613,6 +2742,12 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         },
         { merge: true }
       );
+    });
+    await logInventoryActivity('DELETE_ITEM', userProfile, {
+      entityType: 'withdraw',
+      withdrawNo: target.withdrawNo,
+      projectNo: target.projectNo,
+      reason: 'withdraw_cancelled',
     });
   }, [items, userProfile, withdrawList]);
 
@@ -2873,6 +3008,18 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         })
       );
     });
+    await logInventoryActivity('RECEIVE_TRANSFER', userProfile, {
+      dispatchNo: target.dispatchNo,
+      sourceProjectNo: target.sourceProjectNo,
+      destinationProjectNo: target.destinationProjectNo,
+      totalQty: target.items.reduce(
+        (sum, item) => sum + Math.min(item.qty, receivedQtyByItem.get(item.stockReceiveNo) ?? item.qty),
+        0,
+      ),
+      itemCount: target.items.filter(
+        (item) => (receivedQtyByItem.get(item.stockReceiveNo) ?? item.qty) > 0,
+      ).length,
+    });
   }, [dispatchList, items, projectBorrowList, userProfile]);
 
   const approveReceivingRequest = useCallback(async (requestId: string, receivedItems?: ApproveReceivingRequestLineInput[]) => {
@@ -3072,6 +3219,13 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         { merge: true }
       );
     });
+    await logInventoryActivity('RECEIVE', userProfile, {
+      receiveNo: target.receiveNo,
+      requestId: target.id,
+      projectNo,
+      totalQty: receivingItems.reduce<number>((sum, entry) => sum + entry.receivedQty, 0),
+      itemCount: assignments.length,
+    });
   }, [items, receivingRequestList, userProfile]);
 
   const approveReceipt = useCallback(async (receiveNo: string) => {
@@ -3104,6 +3258,12 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       },
       { merge: true }
     );
+    await logInventoryActivity('RECEIVE', userProfile, {
+      receiveNo,
+      projectNo,
+      itemNo: target.itemNo,
+      qty: target.qty,
+    });
   }, [dispatchList, items, receiveDispatch, userProfile]);
 
   const receiveNewItem = useCallback(async (item: StockItem) => {
@@ -3119,6 +3279,13 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       receivedByEmail: item.receivedByEmail || receiver.receivedByEmail,
       lastReceivedAt: item.lastReceivedAt || item.receiveDate || new Date().toISOString(),
     }));
+    await logInventoryActivity('ADD_ITEM', userProfile, {
+      stockItemId,
+      receiveNo: item.receiveNo,
+      projectNo: getStockItemProjectNo(item),
+      itemNo: item.itemNo,
+      qty: item.qty,
+    });
   }, [userProfile]);
 
   const importStockItems = useCallback(async ({ projectNo, items: importedItems }: ImportStockInput) => {
@@ -3261,7 +3428,75 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         }));
       });
     }
+    await logInventoryActivity('RECEIVE_IMPORT', userProfile, {
+      importNo,
+      projectNo: normalizedProjectNo,
+      totalQty: groupedItems.reduce((sum, item) => sum + item.qty, 0),
+      itemCount: groupedItems.length,
+    });
   }, [userProfile, visibleProjects, visibleStockItems]);
+
+  const updateProjectStockItem = useCallback(async ({
+    projectNo,
+    stockItemIds,
+    itemNo,
+    itemDescription,
+  }: UpdateProjectStockItemInput) => {
+    if (!userProfile?.role.includes('MasterAdmin')) {
+      throw new Error('เฉพาะ MasterAdmin เท่านั้นที่สามารถแก้ไขรายละเอียดสินค้าได้');
+    }
+
+    const normalizedProjectNo = normalizeProjectNoText(projectNo);
+    const normalizedItemNo = normalizeText(itemNo);
+    const normalizedItemDescription = normalizeText(itemDescription);
+    const requestedStockItemIds = [...new Set(stockItemIds.map((id) => normalizeText(id)).filter(Boolean))];
+
+    if (!normalizedProjectNo || !normalizedItemNo || !normalizedItemDescription) {
+      throw new Error('กรุณาระบุโครงการ รหัสสินค้า และชื่อสินค้าให้ครบถ้วน');
+    }
+
+    const targetItems = items.filter((item) => (
+      requestedStockItemIds.includes(getStockItemId(item)) &&
+      projectNoMatches(getStockItemProjectNo(item), normalizedProjectNo)
+    ));
+
+    if (!targetItems.length) {
+      throw new Error('ไม่พบรายการสินค้าในโครงการ กรุณารีเฟรชแล้วลองใหม่');
+    }
+
+    const stockRefs = targetItems.map((item) => (
+      doc(db, APP_NAME, 'root', 'stockItems', getStockItemId(item))
+    ));
+
+    await runTransaction(db, async (transaction) => {
+      const stockSnapshots = await Promise.all(stockRefs.map((stockRef) => transaction.get(stockRef)));
+
+      stockSnapshots.forEach((snapshot, index) => {
+        if (!snapshot.exists()) {
+          throw new Error('ไม่พบรายการสินค้าแล้ว กรุณารีเฟรชแล้วลองใหม่');
+        }
+
+        const currentItem = normalizeStockItem(snapshot.data(), snapshot.id);
+        if (!projectNoMatches(getStockItemProjectNo(currentItem), normalizedProjectNo)) {
+          throw new Error('รายการสินค้าไม่อยู่ในโครงการที่เลือก');
+        }
+
+        // Intentionally update only the item identity fields. Quantity and all stock movement data remain unchanged.
+        transaction.update(stockRefs[index], {
+          itemNo: normalizedItemNo,
+          materialNo: normalizedItemNo,
+          itemDescription: normalizedItemDescription,
+        });
+      });
+    });
+    await logInventoryActivity('EDIT_ITEM', userProfile, {
+      projectNo: normalizedProjectNo,
+      stockItemIds: targetItems.map((item) => getStockItemId(item)),
+      itemNo: normalizedItemNo,
+      itemDescription: normalizedItemDescription,
+      itemCount: targetItems.length,
+    });
+  }, [items, userProfile]);
 
   const deleteReceivingRequest = useCallback(async (requestId: string) => {
     if (!userProfile?.role.includes('MasterAdmin')) {
@@ -3394,11 +3629,25 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       }));
       transaction.delete(requestRef);
     });
+    await logInventoryActivity('DELETE_ITEM', userProfile, {
+      entityType: 'receivingRequest',
+      requestId,
+      receiveNo: target.receiveNo,
+      projectNo: target.projectNo || target.cmgProjectCode,
+      itemCount: target.items.length,
+    });
   }, [receivingRequestList, userProfile]);
 
   const receivePrPoPayload = useCallback(async (payload: PrPoReceivePayload) => {
-    return processPrPoReceivePayload(payload);
-  }, []);
+    const response = await processPrPoReceivePayload(payload);
+    await logInventoryActivity('RECEIVE', userProfile, {
+      source: 'PR_PO_INTEGRATION',
+      projectNo: payload.cmgProjectCode || payload.projectId,
+      itemCount: payload.items?.length ?? 0,
+      result: response.message,
+    });
+    return response;
+  }, [userProfile]);
 
   const updateProjectStatus = useCallback(async (projectNo: string, status: ProjectStatus) => {
     const normalizedProjectNo = projectNo.trim();
@@ -3417,7 +3666,11 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       },
       { merge: true }
     );
-  }, []);
+    await logInventoryActivity('EDIT_PROJECT_STATUS', userProfile, {
+      projectNo: normalizedProjectNo,
+      status: normalizedStatus,
+    });
+  }, [userProfile]);
 
   const value = useMemo<InventoryContextValue>(
     () => ({
@@ -3450,6 +3703,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       receiveDispatch,
       receiveNewItem,
       importStockItems,
+      updateProjectStockItem,
       deleteReceivingRequest,
       receivePrPoPayload,
       activeProjectNo,
@@ -3472,6 +3726,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       receiveDispatch,
       receiveNewItem,
       importStockItems,
+      updateProjectStockItem,
       deleteReceivingRequest,
       receivePrPoPayload,
       rejectProjectBorrowRequest,

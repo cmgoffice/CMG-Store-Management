@@ -1,10 +1,10 @@
-import { ChevronDown, ChevronRight } from 'lucide-react';
-import { Fragment, useMemo, useState } from 'react';
+import { ChevronDown, ChevronRight, Pencil, X } from 'lucide-react';
+import { Fragment, useMemo, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { PageHeader } from '../components/PageHeader';
 import { SearchField } from '../components/SearchField';
 import { getItemTypeOption, matchesItemType } from '../constants/itemTypes';
 import { useInventory } from '../context/InventoryContext';
+import { useRole } from '../context/RoleContext';
 import type { StockItem } from '../types/models';
 import '../styles/tables.css';
 import styles from './StockListPage.module.css';
@@ -25,6 +25,7 @@ type StoreReceiveHistory = {
 
 type AggregatedStoreItem = {
   id: string;
+  stockItemIds: string[];
   location: string;
   vendorName: string;
   itemDescription: string;
@@ -149,11 +150,19 @@ export function StorePage() {
     dispatchRecords,
     withdrawRecords,
     activeProjectNo,
+    updateProjectStockItem,
   } = useInventory();
+  const { hasRole } = useRole();
+  const isMasterAdmin = hasRole('MasterAdmin');
   const [query, setQuery] = useState('');
   const [searchParams] = useSearchParams();
   const selectedItemType = getItemTypeOption(searchParams.get('itemType') ?? '')?.code ?? '';
   const [expandedItemIds, setExpandedItemIds] = useState<string[]>([]);
+  const [editingItem, setEditingItem] = useState<AggregatedStoreItem | null>(null);
+  const [editItemNo, setEditItemNo] = useState('');
+  const [editItemDescription, setEditItemDescription] = useState('');
+  const [editError, setEditError] = useState('');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
   const normalizedActiveProjectNo = normalizeProjectNo(activeProjectNo);
 
   const filteredItems = useMemo<AggregatedStoreItem[]>(() => {
@@ -386,6 +395,7 @@ export function StorePage() {
 
         return {
           id: `${representative.itemNo}-${representative.itemDescription}`,
+          stockItemIds: group.items.map((item) => item.stockItemId || item.receiveNo),
           location,
           vendorName,
           itemDescription: representative.itemDescription,
@@ -413,24 +423,58 @@ export function StorePage() {
     );
   };
 
+  const handleStartEdit = (item: AggregatedStoreItem) => {
+    if (!isMasterAdmin) {
+      return;
+    }
+
+    setEditingItem(item);
+    setEditItemNo(item.itemNo);
+    setEditItemDescription(item.itemDescription);
+    setEditError('');
+  };
+
+  const handleCloseEdit = () => {
+    if (isSavingEdit) {
+      return;
+    }
+
+    setEditingItem(null);
+    setEditError('');
+  };
+
+  const handleSaveEdit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!editingItem || !normalizedActiveProjectNo || !isMasterAdmin) {
+      return;
+    }
+
+    setIsSavingEdit(true);
+    setEditError('');
+    try {
+      await updateProjectStockItem({
+        projectNo: normalizedActiveProjectNo,
+        stockItemIds: editingItem.stockItemIds,
+        itemNo: editItemNo,
+        itemDescription: editItemDescription,
+      });
+      setEditingItem(null);
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : 'ไม่สามารถบันทึกการแก้ไขได้');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
   return (
     <div>
-      <PageHeader
-        eyebrow="Project Store"
-        title="สินค้าคงคลังโครงการ"
-        description={
-          normalizedActiveProjectNo
-            ? `Inventory table for Project ${normalizedActiveProjectNo}.`
-            : 'Select an active project to view store inventory.'
-        }
-        actions={
-          <SearchField
-            value={query}
-            onChange={setQuery}
-            placeholder="ค้นหารายการสินค้าในคลัง"
-          />
-        }
-      />
+      <div className={styles.toolbar}>
+        <SearchField
+          value={query}
+          onChange={setQuery}
+          placeholder="ค้นหารายการสินค้าในคลัง"
+        />
+      </div>
 
       <div className={`tableScroll ${styles.inventoryTableScroll}`}>
         <table className={`table compact ${styles.inventoryTable}`}>
@@ -492,6 +536,26 @@ export function StorePage() {
                     <tr className={styles.detailRow}>
                       <td colSpan={5}>
                         <div className={styles.detailPanel}>
+                          <div className={styles.detailHeader}>
+                            <div>
+                              <strong>{item.itemDescription}</strong>
+                              <span className={styles.itemCodeLabel}>รหัส {item.itemNo}</span>
+                            </div>
+                            {isMasterAdmin ? (
+                              <button
+                                type="button"
+                                className={styles.editButton}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleStartEdit(item);
+                                }}
+                                aria-label={`แก้ไข ${item.itemDescription}`}
+                              >
+                                <Pencil size={14} />
+                                แก้ไข
+                              </button>
+                            ) : null}
+                          </div>
                           <table className={styles.detailTable}>
                             <thead>
                               <tr>
@@ -532,6 +596,74 @@ export function StorePage() {
           </tbody>
         </table>
       </div>
+
+      {editingItem ? (
+        <div
+          className={styles.modalBackdrop}
+          role="presentation"
+          onMouseDown={handleCloseEdit}
+        >
+          <form
+            className={styles.editModal}
+            onSubmit={handleSaveEdit}
+            onMouseDown={(event) => event.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="edit-stock-item-title"
+          >
+            <div className={styles.editModalHeader}>
+              <div>
+                <span className={styles.editModalEyebrow}>MasterAdmin</span>
+                <h2 id="edit-stock-item-title">แก้ไขรายละเอียดสินค้า</h2>
+              </div>
+              <button
+                type="button"
+                className={styles.closeButton}
+                onClick={handleCloseEdit}
+                aria-label="ปิดหน้าต่างแก้ไข"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <label className={styles.formField}>
+              <span>ชื่อสินค้า</span>
+              <input
+                value={editItemDescription}
+                onChange={(event) => setEditItemDescription(event.target.value)}
+                autoFocus
+                required
+              />
+            </label>
+
+            <label className={styles.formField}>
+              <span>รหัสสินค้า</span>
+              <input
+                value={editItemNo}
+                onChange={(event) => setEditItemNo(event.target.value)}
+                required
+              />
+            </label>
+
+            <div className={styles.readOnlyField}>
+              <span>จำนวนคงเหลือ</span>
+              <strong>{editingItem.qty.toLocaleString()}</strong>
+              <small>ไม่สามารถแก้ไขจำนวนจากหน้าต่างนี้ได้</small>
+            </div>
+
+            {editError ? <p className={styles.editError}>{editError}</p> : null}
+
+            <div className={styles.editModalActions}>
+              <button type="button" className={styles.cancelButton} onClick={handleCloseEdit} disabled={isSavingEdit}>
+                ยกเลิก
+              </button>
+              <button type="submit" className={styles.saveButton} disabled={isSavingEdit}>
+                {isSavingEdit ? 'กำลังบันทึก...' : 'บันทึกการแก้ไข'}
+              </button>
+            </div>
+          </form>
+        </div>
+      ) : null}
     </div>
   );
 }

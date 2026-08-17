@@ -2,24 +2,48 @@ import React, { useState } from 'react';
 import { Bell, Search, LogOut, User as UserIcon, X, Settings } from 'lucide-react';
 import { ITEM_TYPE_OPTIONS, getItemTypeOption } from '../constants/itemTypes';
 import { useAuth } from '../context/AuthContext';
-import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useDialog } from '../context/DialogContext';
 import { useLanguage } from '../context/LanguageContext';
+import { useInventory } from '../context/InventoryContext';
+import type { PendingTask } from '../hooks/usePendingTasks';
 import styles from './Header.module.css';
 
 interface HeaderProps {
   menuButton: React.ReactNode;
+  pendingTasks: PendingTask[];
 }
 
-export function Header({ menuButton }: HeaderProps) {
+const menuTitles = [
+  { path: '/store/project-borrow', title: 'ยืม-คืนระหว่างโครงการ' },
+  { path: '/store/withdraw', title: 'เบิกสินค้า' },
+  { path: '/store/dispatch', title: 'จัดส่งสินค้า' },
+  { path: '/store/store', title: 'คลังโครงการ' },
+  { path: '/store/stock', title: 'สินค้าคงคลัง' },
+  { path: '/receiving', title: 'รับสินค้า' },
+  { path: '/cancellations', title: 'ยกเลิกรายการ' },
+  { path: '/projects', title: 'รายการโครงการ' },
+  { path: '/admin', title: 'จัดการผู้ใช้' },
+  { path: '/activity-logs', title: 'ประวัติกิจกรรม' },
+];
+
+function getActiveMenuTitle(pathname: string) {
+  return menuTitles.find(({ path }) => pathname === path || pathname.startsWith(`${path}/`))?.title ?? 'แดชบอร์ด';
+}
+
+export function Header({ menuButton, pendingTasks }: HeaderProps) {
   const { userProfile, updateProfile, logout } = useAuth();
+  const { setActiveProjectNo } = useInventory();
+  const location = useLocation();
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { showAlert } = useDialog();
   const { language, setLanguage } = useLanguage();
   const selectedItemType = getItemTypeOption(searchParams.get('itemType') ?? '')?.code ?? '';
+  const activeMenuTitle = getActiveMenuTitle(location.pathname);
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -79,6 +103,14 @@ export function Header({ menuButton }: HeaderProps) {
     }
   };
 
+  const handleTaskClick = (task: PendingTask) => {
+    if (task.projectNo) {
+      setActiveProjectNo(task.projectNo);
+    }
+    setIsNotificationsOpen(false);
+    navigate(task.route);
+  };
+
   return (
     <>
       <header className={styles.header}>
@@ -86,7 +118,7 @@ export function Header({ menuButton }: HeaderProps) {
           {menuButton}
           <div>
             <p className={styles.system}>ระบบจัดการคลังสินค้า CMG</p>
-            <span>สินค้าคงคลัง การจัดส่ง และการรับสินค้าหน้างาน</span>
+            <span>{activeMenuTitle}</span>
           </div>
         </div>
         
@@ -117,9 +149,46 @@ export function Header({ menuButton }: HeaderProps) {
         </label>
 
         <div className={styles.actions}>
-          <button className={styles.iconButton} type="button" aria-label="การแจ้งเตือน">
-            <Bell size={18} />
-          </button>
+          <div className={styles.notificationWrap}>
+            <button
+              className={styles.iconButton}
+              type="button"
+              aria-label={`การแจ้งเตือน${pendingTasks.length ? ` ${pendingTasks.length} รายการ` : ''}`}
+              aria-expanded={isNotificationsOpen}
+              onClick={() => setIsNotificationsOpen((open) => !open)}
+            >
+              <Bell size={18} />
+              {pendingTasks.length > 0 ? (
+                <span className={styles.notificationBadge}>{pendingTasks.length > 99 ? '99+' : pendingTasks.length}</span>
+              ) : null}
+            </button>
+            {isNotificationsOpen ? (
+              <div className={styles.notificationPanel} role="dialog" aria-label="รายการแจ้งเตือน">
+                <div className={styles.notificationHeader}>
+                  <div>
+                    <strong>รายการรอดำเนินการ</strong>
+                    <span>{pendingTasks.length} รายการตามสิทธิ์ของคุณ</span>
+                  </div>
+                  <button type="button" className={styles.notificationClose} onClick={() => setIsNotificationsOpen(false)} aria-label="ปิดแจ้งเตือน">
+                    <X size={15} />
+                  </button>
+                </div>
+                <div className={styles.notificationList}>
+                  {pendingTasks.length > 0 ? pendingTasks.map((task) => (
+                    <button key={task.id} type="button" className={styles.notificationItem} onClick={() => handleTaskClick(task)}>
+                      <span className={styles.notificationDot} />
+                      <span className={styles.notificationItemText}>
+                        <strong>{task.title}</strong>
+                        <small>{task.description}</small>
+                      </span>
+                    </button>
+                  )) : (
+                    <div className={styles.notificationEmpty}>ไม่มีรายการที่รอดำเนินการ</div>
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </div>
 
           <button
             className={styles.languageButton}

@@ -1,6 +1,5 @@
 import { Check, ClipboardX, PackageMinus, Plus, Search, ShieldCheck, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { PageHeader } from '../components/PageHeader';
 import { useDialog } from '../context/DialogContext';
 import { useInventory } from '../context/InventoryContext';
 import { useRole } from '../context/RoleContext';
@@ -130,7 +129,9 @@ export function CancellationPage() {
 
   return (
     <div className={styles.page}>
-      <PageHeader eyebrow="PROJECT STORE STOCK ADJUSTMENT" title="ยกเลิกรายการ" description="ตัดยอดสินค้าที่อยู่ในคลังโครงการ พร้อมเหตุผลและประวัติการยกเลิก" actions={<button type="button" className={styles.createButton} onClick={() => { setIsCreateOpen(true); setSelectedItem(null); setCancelQty(''); setReason(''); setItemQuery(''); }} disabled={!activeProjectNo}><Plus size={16} /> สร้างรายการยกเลิก</button>} />
+      <div className={styles.toolbarTop}>
+        <button type="button" className={styles.createButton} onClick={() => { setIsCreateOpen(true); setSelectedItem(null); setCancelQty(''); setReason(''); setItemQuery(''); }} disabled={!activeProjectNo}><Plus size={16} /> สร้างรายการยกเลิก</button>
+      </div>
       <div className={styles.contextBar}><PackageMinus size={17} /><span>คลังโครงการ: <strong>{activeProjectNo || '-'}</strong></span><span className={styles.contextHint}>ตัดยอดจริงหลังอนุมัติครบ 2 ขั้นเท่านั้น</span></div>
       <div className={styles.workflowBanner}><ShieldCheck size={20} /><div><strong>Approval Flow 2 Step</strong><span>ผู้ขอระบุจำนวนและเหตุผล → อนุมัติขั้นที่ 1 → ผู้อนุมัติคนละคนยืนยันขั้นที่ 2 → ระบบตัดยอดและเก็บประวัติ</span></div></div>
 

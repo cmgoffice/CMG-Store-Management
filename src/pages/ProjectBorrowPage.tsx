@@ -1,8 +1,7 @@
 import { ArrowLeftRight, Check, ClipboardList, Package, Plus, RotateCcw, Search, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { PageHeader } from '../components/PageHeader';
 import { SearchField } from '../components/SearchField';
-import { matchesItemType } from '../constants/itemTypes';
+import { inferItemTypeCode, matchesProjectBorrowItemType } from '../constants/itemTypes';
 import { useDialog } from '../context/DialogContext';
 import { useInventory } from '../context/InventoryContext';
 import type { ProjectBorrowRequest, StockItem } from '../types/models';
@@ -18,10 +17,6 @@ function projectNo(value: string) {
 function itemProjectNo(item: StockItem) {
   const value = item.cmgProjectCode || item.purchasedForProject || item.location || item.projectId || '';
   return projectNo(value.replace(/^Store\s+|^Project\s+|^In Transit to\s+(Store|Project)\s+/i, ''));
-}
-
-function isEqm(item: StockItem) {
-  return matchesItemType(item, 'EQM');
 }
 
 function dateText(value: string) {
@@ -74,7 +69,7 @@ export function ProjectBorrowPage() {
   const availableEqm = useMemo(() => {
     const query = itemQuery.trim().toLowerCase();
     return allStockItems.filter((item) => {
-      if (!lenderProjectNo || itemProjectNo(item) !== projectNo(lenderProjectNo) || !isStockItemAvailableForMovement(item) || !isEqm(item)) return false;
+      if (!lenderProjectNo || itemProjectNo(item) !== projectNo(lenderProjectNo) || !isStockItemAvailableForMovement(item) || !matchesProjectBorrowItemType(item)) return false;
       return !query || [item.itemNo, item.itemDescription, item.materialNo, item.receiveNo, item.location].join(' ').toLowerCase().includes(query);
     });
   }, [allStockItems, itemQuery, lenderProjectNo]);
@@ -149,12 +144,9 @@ export function ProjectBorrowPage() {
 
   return (
     <div className={styles.page}>
-      <PageHeader
-        eyebrow="PROJECT ASSET FLOW"
-        title="ยืม-คืนระหว่างโครงการ"
-        description="ขอใช้ EQM จากโครงการอื่น ให้เจ้าของอนุมัติก่อน แล้ว Store ดำเนินการย้ายโครงการตามปกติ"
-        actions={<button type="button" className={styles.primaryButton} onClick={() => { resetModal(); setIsModalOpen(true); }} disabled={!borrowerProjectNo || lenderProjects.length === 0}><Plus size={17} /> ขอรีเควสยืม</button>}
-      />
+      <div className={styles.toolbar}>
+        <button type="button" className={styles.primaryButton} onClick={() => { resetModal(); setIsModalOpen(true); }} disabled={!borrowerProjectNo || lenderProjects.length === 0}><Plus size={17} /> ขอรีเควสยืม</button>
+      </div>
 
       <div className={styles.contextBar}><ArrowLeftRight size={16} /><span>โครงการที่กำลังใช้งาน: <strong>{borrowerProjectNo || '-'}</strong> {activeProject?.projectName ? `— ${activeProject.projectName}` : ''}</span><span className={styles.contextHint}>สิทธิ์อนุมัติจะตรวจจากโครงการผู้ให้ยืม</span></div>
 
@@ -173,7 +165,8 @@ export function ProjectBorrowPage() {
               {visibleRequests.map((request) => {
                 const isBorrower = request.borrowerProjectNo === projectNo(borrowerProjectNo);
                 const isLender = request.lenderProjectNo === projectNo(borrowerProjectNo);
-                return <tr key={request.id}>
+                const requiresAction = isLender && (request.status === 'Pending Approval' || request.status === 'Return Requested');
+                return <tr key={request.id} className={requiresAction ? styles.actionRequiredRow : undefined}>
                   <td><strong className={styles.requestNo}>{request.requestNo}</strong><small>{request.requestedByName}</small></td>
                   <td><span className={isBorrower ? styles.roleBorrow : styles.roleLend}>{isBorrower ? 'ยืมมา' : 'ให้ยืม'}</span></td>
                   <td><strong>{isBorrower ? request.lenderProjectNo : request.borrowerProjectNo}</strong><small>{isBorrower ? request.lenderProjectName : request.borrowerProjectName}</small></td>
@@ -194,11 +187,31 @@ export function ProjectBorrowPage() {
       </section>
 
       {isModalOpen ? <div className={styles.modalOverlay}><section className={styles.modal} role="dialog" aria-modal="true">
-        <div className={styles.modalHeader}><div><p className={styles.eyebrow}>NEW REQUEST</p><h2>ขอรีเควสยืม EQM</h2><p>เลือกโครงการเจ้าของ แล้วเลือกเฉพาะ EQM ที่พร้อมให้ยืม</p></div><button className={styles.closeButton} onClick={() => setIsModalOpen(false)} aria-label="ปิด"><X size={19} /></button></div>
+        <div className={styles.modalHeader}><div><p className={styles.eyebrow}>NEW REQUEST</p><h2>ขอรีเควสยืม EQM</h2><p>เลือกโครงการเจ้าของ แล้วเลือก EQM, นั่งร้าน หรือแบบเหล็กที่พร้อมให้ยืม</p></div><button className={styles.closeButton} onClick={() => setIsModalOpen(false)} aria-label="ปิด"><X size={19} /></button></div>
         <div className={styles.modalBody}>
           <div className={styles.formGrid}><label>โครงการผู้ยืม<input value={`${borrowerProjectNo} — ${activeProject?.projectName || ''}`} readOnly /></label><label>โครงการที่จะยืม<select value={lenderProjectNo} onChange={(event) => { setLenderProjectNo(event.target.value); setSelectedItems({}); }}>{lenderProjects.map((project) => <option key={project.projectNo} value={project.projectNo}>{project.projectNo} — {project.projectName}</option>)}</select></label><label>วัตถุประสงค์<input value={purpose} onChange={(event) => setPurpose(event.target.value)} placeholder="เช่น ใช้งานชั่วคราวในพื้นที่..." /></label><label>กำหนดคืน (ถ้ามี)<input type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} /></label></div>
-          <div className={styles.pickerHeader}><div><h3>รายการ EQM ที่พร้อมให้ยืม</h3><span>เลือกแล้ว {Object.keys(selectedItems).length} รายการ</span></div><SearchField value={itemQuery} onChange={setItemQuery} placeholder="ค้นหา EQM / รายละเอียด" /></div>
-          <div className={styles.itemList}>{availableEqm.map((item) => { const id = getStockItemId(item); const selected = selectedItems[id] !== undefined; return <div className={`${styles.itemRow} ${selected ? styles.itemSelected : ''}`} key={id}><input type="checkbox" checked={selected} onChange={() => toggleItem(item)} /><div className={styles.itemInfo}><strong>{item.itemNo || item.materialNo}</strong><span>{item.itemDescription || '-'} · {item.receiveNo}</span></div><span className={styles.available}>พร้อมให้ยืม {item.qty.toLocaleString()} {item.unit || 'ชิ้น'}</span>{selected ? <input className={styles.qtyInput} type="number" min="1" max={item.qty} value={selectedItems[id]} onChange={(event) => setSelectedItems((current) => ({ ...current, [id]: event.target.value }))} aria-label={`จำนวน ${item.itemNo}`} /> : null}</div>; })}{availableEqm.length === 0 ? <div className={styles.empty}><Search size={18} />ไม่พบ EQM ที่พร้อมให้ยืมของโครงการนี้</div> : null}</div>
+          <div className={styles.pickerHeader}><div><h3>รายการ EQM / นั่งร้าน / แบบเหล็ก ที่พร้อมให้ยืม</h3><span>เลือกแล้ว {Object.keys(selectedItems).length} รายการ</span></div><SearchField value={itemQuery} onChange={setItemQuery} placeholder="ค้นหา EQM / รายละเอียด" /></div>
+          <div className={styles.itemList}>
+            <div className={styles.itemListHeader} role="row">
+              <span>เลือก</span><span>รหัสรายการ</span><span>รายละเอียด</span><span>หมวด</span><span>เลขที่รับเข้า</span><span>พร้อมให้ยืม</span><span>จำนวนที่ขอยืม</span>
+            </div>
+            {availableEqm.map((item) => {
+              const id = getStockItemId(item);
+              const selected = selectedItems[id] !== undefined;
+              const itemTypeCode = inferItemTypeCode(item);
+              const itemTypeLabel = itemTypeCode === 'SCAFF' ? 'นั่งร้าน' : itemTypeCode === 'EQM' ? 'EQM' : 'แบบเหล็ก';
+              return <div className={`${styles.itemRow} ${selected ? styles.itemSelected : ''}`} key={id} role="row">
+                <input type="checkbox" checked={selected} onChange={() => toggleItem(item)} aria-label={`เลือกรายการ ${item.itemNo || item.materialNo}`} />
+                <strong className={styles.itemNo}>{item.itemNo || item.materialNo}</strong>
+                <span className={styles.itemDescription}>{item.itemDescription || '-'}</span>
+                <span className={styles.itemCategory}>{itemTypeLabel}</span>
+                <span className={styles.itemReceiveNo}>{item.receiveNo || '-'}</span>
+                <span className={styles.available} aria-label={`พร้อมให้ยืม ${item.qty.toLocaleString()} ${item.unit || 'ชิ้น'}`}>{item.qty.toLocaleString()}</span>
+                {selected ? <input className={styles.qtyInput} type="number" min="1" max={item.qty} value={selectedItems[id]} onChange={(event) => setSelectedItems((current) => ({ ...current, [id]: event.target.value }))} aria-label={`จำนวน ${item.itemNo}`} /> : <span className={styles.qtyPlaceholder}>-</span>}
+              </div>;
+            })}
+            {availableEqm.length === 0 ? <div className={styles.empty}><Search size={18} />ไม่พบรายการ EQM / นั่งร้าน / แบบเหล็กที่พร้อมให้ยืมของโครงการนี้</div> : null}
+          </div>
         </div>
         <div className={styles.modalFooter}><button className={styles.secondaryButton} onClick={() => setIsModalOpen(false)}>ยกเลิก</button><button className={styles.primaryButton} disabled={isSubmitting || Object.keys(selectedItems).length === 0 || !purpose.trim()} onClick={submitRequest}>{isSubmitting ? 'กำลังบันทึก...' : 'สร้างคำขอ'}</button></div>
       </section></div> : null}

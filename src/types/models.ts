@@ -255,6 +255,7 @@ export interface WithdrawItemSnapshot {
   poNo: string;
   itemNo: string;
   itemDescription: string;
+  requesterName: string;
   qty: number;
   returnedQty?: number;
   amount: number;

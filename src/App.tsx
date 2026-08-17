@@ -13,6 +13,7 @@ import { PendingApprovalPage } from './pages/PendingApprovalPage';
 import { AdminPanel } from './pages/AdminPanel';
 import { ProjectBorrowPage } from './pages/ProjectBorrowPage';
 import { CancellationPage } from './pages/CancellationPage';
+import { ActivityLogPage } from './pages/ActivityLogPage';
 import { ProtectedRoute } from './components/ProtectedRoute';
 
 export function App() {
@@ -76,6 +77,14 @@ export function App() {
                   element={
                     <ProtectedRoute requireApproved={true} requireRoles={['MasterAdmin']}>
                       <AdminPanel />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/activity-logs"
+                  element={
+                    <ProtectedRoute requireApproved={true} requireRoles={['MasterAdmin']}>
+                      <ActivityLogPage />
                     </ProtectedRoute>
                   }
                 />

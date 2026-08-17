@@ -7,6 +7,14 @@
   display: none;
 }
 
+.toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 .headerButton {
   display: inline-flex;
   min-height: 38px;
@@ -84,12 +92,12 @@
   justify-content: center;
   padding: 0 5px;
   border-radius: 999px;
-  background: #e11d48;
+  background: #ff7a00;
   color: #fff;
   font-size: 9px;
   font-weight: 900;
   line-height: 1;
-  box-shadow: 0 8px 16px rgb(225 29 72 / 18%);
+  box-shadow: 0 8px 16px rgb(255 122 0 / 24%);
 }
 
 .notice {
@@ -610,6 +618,33 @@
   cursor: pointer;
 }
 
+.actionRequiredRow > td {
+  background: #fff0f3;
+  animation: actionRequiredRowPulse 1.6s ease-in-out infinite;
+}
+
+.actionRequiredRow > td:first-child {
+  border-left: 4px solid #f6a6b8;
+}
+
+@keyframes actionRequiredRowPulse {
+  0%,
+  100% {
+    background-color: #fff4f6;
+  }
+
+  50% {
+    background-color: #ffdbe3;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .actionRequiredRow > td {
+    animation: none;
+    background: #fff0f3;
+  }
+}
+
 .modalOverlay {
   position: fixed;
   inset: 0;
@@ -870,6 +905,12 @@
   gap: 16px;
 }
 
+.requestDetailHero {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  align-items: stretch;
+}
+
 .detailGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -960,7 +1001,7 @@
 
 .requestReceiveFormHead,
 .requestReceiveFormRow {
-  grid-template-columns: 130px minmax(180px, 1fr) 90px 120px minmax(180px, 1fr);
+  grid-template-columns: 120px 125px minmax(180px, 1fr) 80px 105px minmax(155px, 1fr);
 }
 
 .receiveItemRow,
@@ -969,6 +1010,33 @@
   color: var(--color-text);
   font-size: 12px;
   font-weight: 600;
+}
+
+.requestReceiveFormRow {
+  min-height: 52px;
+  padding-top: 8px;
+  padding-bottom: 8px;
+}
+
+.requestReceiveFormRow > * {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.itemDescriptionInline {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.itemDescriptionInline small {
+  display: inline;
+  flex: 0 0 auto;
+  margin-top: 0;
+  white-space: nowrap;
 }
 
 .receiveItemRow small,
@@ -987,7 +1055,7 @@
 
 .qtyInput {
   width: 100%;
-  min-height: 40px;
+  min-height: 34px;
   border: 1px solid #b8c9e3;
   border-radius: 12px;
   background: #f8fbff;
@@ -995,7 +1063,7 @@
   color: #123257;
   font: inherit;
   font-weight: 700;
-  padding: 10px 12px;
+  padding: 6px 10px;
   text-align: right;
   font-variant-numeric: tabular-nums;
 }
@@ -1009,7 +1077,7 @@
 
 .itemTypeSelect {
   width: 100%;
-  min-height: 40px;
+  min-height: 34px;
   border: 1px solid #b8c9e3;
   border-radius: 12px;
   background: #f8fbff;
@@ -1017,7 +1085,7 @@
   font: inherit;
   font-size: 12px;
   font-weight: 700;
-  padding: 0 10px;
+  padding: 0 8px;
 }
 
 .itemTypeSelect:focus {
@@ -1065,6 +1133,11 @@
 }
 
 @media (max-width: 720px) {
+  .toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .tabs {
     display: grid;
   }
@@ -1080,6 +1153,7 @@
 
   .detailGrid,
   .modalInfoRow,
+  .requestDetailHero,
   .receiveItemsHead,
   .receiveFormHead,
   .receiveItemRow,

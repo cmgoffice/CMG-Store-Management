@@ -16,13 +16,15 @@ const translations: Record<string, string> = {
   'Search inventory': 'ค้นหาสินค้าคงคลัง', 'Dispatch Selected': 'จัดส่งรายการที่เลือก', 'Waiting for Receipt': 'รอการรับสินค้า',
   'Create Withdraw': 'สร้างรายการเบิก', 'Withdraw Records': 'รายการเบิกสินค้า', 'Waiting Return / Due': 'รอคืน / กำหนดคืน',
   'User Control Panel': 'จัดการผู้ใช้', 'Loading directory...': 'กำลังโหลดรายชื่อ...', 'Approve': 'อนุมัติ',
+  'Activity Log': 'ประวัติกิจกรรม', 'Log Activity': 'ประวัติกิจกรรม',
   'Create Account': 'สร้างบัญชีผู้ใช้', 'First Name': 'ชื่อ', 'Last Name': 'นามสกุล', 'Password': 'รหัสผ่าน',
   'Email Address': 'อีเมล', 'Submit Registration': 'ส่งคำขอลงทะเบียน', 'Sign In with Password': 'เข้าสู่ระบบด้วยรหัสผ่าน',
   'Continue with Google': 'ดำเนินการต่อด้วย Google', 'Sign Up Now': 'สมัครใช้งาน', 'Sign In': 'เข้าสู่ระบบ',
   'Pending Registration Approval': 'รออนุมัติการลงทะเบียน', 'Log Out and Return': 'ออกจากระบบและกลับ',
   'Edit Profile': 'แก้ไขโปรไฟล์', 'Cancel': 'ยกเลิก', 'Save Settings': 'บันทึกการตั้งค่า',
   'Status': 'สถานะ', 'Action': 'การดำเนินการ', 'Items': 'รายการ', 'Amount': 'มูลค่า', 'Qty': 'จำนวน',
-  'Available': 'คงเหลือ', 'No photo': 'ไม่มีรูปภาพ',
+  'Available': 'พร้อมใช้งาน', 'No photo': 'ไม่มีรูปภาพ',
+  'Issue / Consume': 'เบิกจ่าย / ใช้', 'Borrow / Return': 'ยืม / คืน',
 };
 
 function translateDocument(language: Language) {

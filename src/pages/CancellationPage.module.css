@@ -1,7 +1,8 @@
-.page { display: flex; flex-direction: column; gap: 20px; padding: 28px 32px 44px; min-height: 100%; background: #f7f8fc; }
+.page { display: flex; flex-direction: column; gap: 20px; padding: 0 0 30px; min-height: 100%; background: #f7f8fc; }
 .createButton { display: inline-flex; align-items: center; gap: 7px; padding: 10px 14px; border: 0; border-radius: 10px; background: #6b48d7; color: #fff; cursor: pointer; font: inherit; font-size: 12px; font-weight: 700; }
 .createButton:hover { background: #5432bd; }
 .createButton:disabled { cursor: not-allowed; opacity: .55; }
+.toolbarTop { display: flex; justify-content: flex-end; align-items: center; }
 .contextBar { display: flex; align-items: center; gap: 9px; padding: 12px 15px; border: 1px solid #e9e5f7; border-radius: 12px; background: #fff; color: #5d566d; font-size: 12px; }
 .contextBar strong { color: #4f32bc; }
 .contextHint { margin-left: auto; color: #918b9e; font-size: 11px; }
@@ -98,5 +99,5 @@
 .primaryButton { background: #6b48d7; color: #fff; }
 .secondaryButton { background: #f2f1f5; color: #655f70; }
 
-@media (max-width: 900px) { .page { padding: 22px 18px 34px; } .sourceGrid, .summaryGrid { grid-template-columns: 1fr; } .sectionHeader { flex-direction: column; } .toolbar { justify-content: stretch; } .pageHint { margin: 0 0 8px; } .searchBox { width: 100%; } .pickerLayout { grid-template-columns: 1fr; } .pickerList { max-height: 240px; } }
+@media (max-width: 900px) { .sourceGrid, .summaryGrid { grid-template-columns: 1fr; } .sectionHeader { flex-direction: column; } .toolbarTop { justify-content: stretch; } .toolbarTop .createButton { width: 100%; justify-content: center; } .toolbar { justify-content: stretch; } .pageHint { margin: 0 0 8px; } .searchBox { width: 100%; } .pickerLayout { grid-template-columns: 1fr; } .pickerList { max-height: 240px; } }
 @media (max-width: 560px) { .contextBar { align-items: flex-start; flex-wrap: wrap; } .contextHint { width: 100%; margin-left: 26px; } .workflowBanner { align-items: flex-start; } .modalHeader, .modalBody, .modalFooter { padding-left: 18px; padding-right: 18px; } }

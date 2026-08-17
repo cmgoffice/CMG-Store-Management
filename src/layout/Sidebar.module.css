@@ -61,6 +61,7 @@
   margin-top: 96px;
   overflow-x: hidden;
   overflow-y: auto;
+  padding-top: 12px;
   padding-bottom: 16px;
   scrollbar-width: none;
 }
@@ -75,6 +76,8 @@
 .projectDotWrap {
   position: relative;
   display: inline-flex;
+  isolation: isolate;
+  z-index: 4;
 }
 
 .projectDivider {
@@ -120,23 +123,23 @@
 
 .projectBadge {
   position: absolute;
-  top: -6px;
-  right: -7px;
-  z-index: 3;
+  top: -10px;
+  right: 0;
+  z-index: 10;
   display: inline-flex;
   min-width: 18px;
   height: 18px;
   align-items: center;
   justify-content: center;
   padding: 0 5px;
-  border: 2px solid #6e42f4;
+  border: 2px solid #ff7a00;
   border-radius: 999px;
-  background: #8b1e1e;
-  color: #fff7f7;
+  background: #ff7a00;
+  color: #fff;
   font-size: 9px;
   font-weight: 900;
   line-height: 1;
-  box-shadow: 0 6px 14px rgb(139 30 30 / 28%);
+  box-shadow: 0 6px 14px rgb(255 122 0 / 28%);
   pointer-events: none;
 }
 
@@ -331,12 +334,12 @@
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  background: #8b1e1e;
-  color: #fff7f7;
+  background: #ff7a00;
+  color: #fff;
   font-weight: 900;
   line-height: 1;
   text-align: center;
-  box-shadow: 0 8px 18px rgb(139 30 30 / 26%);
+  box-shadow: 0 8px 18px rgb(255 122 0 / 30%);
 }
 
 .groupBadge {
@@ -492,6 +495,16 @@
   overflow-x: hidden;
   margin-top: auto;
   padding: 14px 0 26px 18px;
+}
+
+.bottomGroup {
+  display: grid;
+  min-width: 0;
+}
+
+.groupHeaderActive {
+  background: var(--color-sidebar-hover);
+  color: #fff;
 }
 
 .logout {
@@ -674,11 +687,11 @@
   height: 18px;
   padding: 0 5px;
   border-radius: 999px;
-  background-color: #8b1e1e;
-  color: #fff7f7;
+  background-color: #ff7a00;
+  color: #fff;
   font-size: 9px;
   font-weight: 800;
   line-height: 1;
   text-align: center;
-  box-shadow: 0 2px 8px rgb(139 30 30 / 0.4);
+  box-shadow: 0 2px 8px rgb(255 122 0 / 0.4);
 }

@@ -12,6 +12,8 @@ export const ITEM_TYPE_OPTIONS = [
   { group: 'Type 2', code: 'Formwork', label: 'แบบเหล็ก' },
 ] as const;
 
+export const PROJECT_BORROW_ITEM_TYPES = ['EQM', 'SCAFF', 'FWPR', 'Formwork'] as const;
+
 export type ItemTypeCode = (typeof ITEM_TYPE_OPTIONS)[number]['code'];
 export type ItemTypeGroup = (typeof ITEM_TYPE_OPTIONS)[number]['group'];
 
@@ -40,7 +42,7 @@ export function getItemTypeOption(value?: string) {
     normalizedValue,
     normalizedValue.replace(/^TYPE[\s_-]*/, ''),
   ];
-  return ITEM_TYPE_OPTIONS.find((option) => valuesToMatch.includes(normalizeTypeCode(option.code)));
+  return ITEM_TYPE_OPTIONS.find((option) => valuesToMatch.includes(normalizeTypeCode(option.code)) || normalizedValue === normalizeTypeCode(option.label));
 }
 
 export function inferItemTypeCode(source: ItemTypeSource): ItemTypeCode | '' {
@@ -70,4 +72,8 @@ export function inferItemTypeCode(source: ItemTypeSource): ItemTypeCode | '' {
 
 export function matchesItemType(source: ItemTypeSource, selectedType: ItemTypeCode | '') {
   return !selectedType || inferItemTypeCode(source) === selectedType;
+}
+
+export function matchesProjectBorrowItemType(source: ItemTypeSource) {
+  return PROJECT_BORROW_ITEM_TYPES.some((itemType) => matchesItemType(source, itemType));
 }

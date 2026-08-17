@@ -1,6 +1,5 @@
 import { ImagePlus, ListPlus, Send, Trash2, X } from 'lucide-react';
 import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
-import { PageHeader } from '../components/PageHeader';
 import { SearchField } from '../components/SearchField';
 import { StatusBadge } from '../components/StatusBadge';
 import { useInventory } from '../context/InventoryContext';
@@ -396,34 +395,23 @@ export function DispatchPage() {
 
   return (
     <div>
-      <PageHeader
-        eyebrow="Store"
-        title="จัดส่งสินค้า"
-        description={
-          activeProject
-            ? `Dispatch stock from Store of Project ${activeProject.projectNo}. Sent items wait here until the destination project receives them.`
-            : 'Dispatch stock between active project stores.'
-        }
-        actions={
-          <>
-            <SearchField
-              value={query}
-              onChange={setQuery}
-              placeholder="ค้นหารายการจัดส่งที่รอรับ"
-            />
-            <button
-              className={styles.primaryButton}
-              type="button"
-              disabled={!canDispatch}
-              onClick={handleOpenModal}
-              title={dispatchUnavailableReason || 'สร้างรายการจัดส่ง'}
-            >
-              <Send size={16} />
-              <span>จัดส่งรายการที่เลือก</span>
-            </button>
-          </>
-        }
-      />
+      <div className={styles.toolbar}>
+        <SearchField
+          value={query}
+          onChange={setQuery}
+          placeholder="ค้นหารายการจัดส่งที่รอรับ"
+        />
+        <button
+          className={styles.primaryButton}
+          type="button"
+          disabled={!canDispatch}
+          onClick={handleOpenModal}
+          title={dispatchUnavailableReason || 'สร้างรายการจัดส่ง'}
+        >
+          <Send size={16} />
+          <span>จัดส่งรายการที่เลือก</span>
+        </button>
+      </div>
 
       {!canDispatch ? (
         <div className={styles.notice}>
@@ -450,7 +438,7 @@ export function DispatchPage() {
           <table className={`table compact ${styles.dispatchTable}`}>
             <thead>
               <tr>
-                <th>เลขที่จัดส่ง</th><th>เส้นทาง</th><th>วันที่จัดส่ง</th><th>ทะเบียนรถ</th><th>รายการ</th><th>เอกสารแนบ</th><th>ผู้ส่ง</th><th>สถานะ</th>
+                <th>เลขที่จัดส่ง</th><th>เส้นทาง</th><th>วันที่จัดส่ง</th><th>ทะเบียนรถ</th><th>รายการ</th><th>เอกสารแนบ</th><th>ผู้ส่ง</th><th>สถานะ</th><th>Action</th>
               </tr>
             </thead>
             <tbody>
@@ -469,24 +457,7 @@ export function DispatchPage() {
                   aria-label={`Open dispatch ${record.dispatchNo} details`}
                 >
                   <td>
-                    <div className={styles.dispatchCodeCell}>
-                      <span className={styles.dispatchCode}>{record.dispatchNo}</span>
-                      {record.status === 'Pending Receipt' ? (
-                        <button
-                          type="button"
-                          className={styles.cancelButton}
-                          disabled={!canCancelDispatch || cancellingDispatchId === record.id}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            handleCancelDispatch(record);
-                          }}
-                          title={canCancelDispatch ? 'ยกเลิกรายการจัดส่งและคืนยอดไปยัง Store ต้นทาง' : 'เฉพาะ Store Center สามารถยกเลิกรายการจัดส่งได้'}
-                        >
-                          {cancellingDispatchId === record.id ? <span className={styles.spinner} /> : <X size={12} />}
-                          <span>{cancellingDispatchId === record.id ? 'กำลังยกเลิก...' : 'ยกเลิก'}</span>
-                        </button>
-                      ) : null}
-                    </div>
+                    <span className={styles.dispatchCode}>{record.dispatchNo}</span>
                   </td>
                   <td>
                     <strong
@@ -531,11 +502,30 @@ export function DispatchPage() {
                   <td>
                     <StatusBadge status={record.status} />
                   </td>
+                  <td className={styles.actionCell}>
+                    {record.status === 'Pending Receipt' ? (
+                      <button
+                        type="button"
+                        className={styles.cancelButton}
+                        disabled={!canCancelDispatch || cancellingDispatchId === record.id}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          handleCancelDispatch(record);
+                        }}
+                        title={canCancelDispatch ? 'ยกเลิกรายการจัดส่งและคืนยอดไปยัง Store ต้นทาง' : 'เฉพาะ Store Center สามารถยกเลิกรายการจัดส่งได้'}
+                      >
+                        {cancellingDispatchId === record.id ? <span className={styles.spinner} /> : <X size={12} />}
+                        <span>{cancellingDispatchId === record.id ? 'กำลังยกเลิก...' : 'ยกเลิก'}</span>
+                      </button>
+                    ) : (
+                      <span className={styles.mutedText}>-</span>
+                    )}
+                  </td>
                 </tr>
               ))}
               {pendingReceipts.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className={styles.empty}>
+                  <td colSpan={9} className={styles.empty}>
                     No outgoing dispatch records are waiting for receipt from this active project.
                   </td>
                 </tr>

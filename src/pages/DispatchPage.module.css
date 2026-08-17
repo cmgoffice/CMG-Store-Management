@@ -21,6 +21,14 @@
   background: #eef2ff;
 }
 
+.toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 .tabButton {
   min-height: 40px;
   border: 0;
@@ -148,6 +156,11 @@
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.actionCell {
+  width: 110px;
+  text-align: center;
 }
 
 .cancelButton {
@@ -925,6 +938,11 @@
 }
 
 @media (max-width: 720px) {
+  .toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .tabs {
     display: grid;
   }

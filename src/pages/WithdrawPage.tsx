@@ -10,7 +10,6 @@ import {
   X,
 } from 'lucide-react';
 import { useEffect, useMemo, useState, type ChangeEvent } from 'react';
-import { PageHeader } from '../components/PageHeader';
 import { SearchField } from '../components/SearchField';
 import { StatusBadge } from '../components/StatusBadge';
 import { useInventory } from '../context/InventoryContext';
@@ -139,14 +138,14 @@ export function WithdrawPage() {
     cancelWithdraw,
     activeProjectNo,
   } = useInventory();
-  const { roleLabel, isReadOnly } = useRole();
+  const { roleLabel, isReadOnly, hasRole } = useRole();
+  const isMasterAdmin = hasRole('MasterAdmin');
   const [activeTab, setActiveTab] = useState<WithdrawTab>('records');
   const [query, setQuery] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isItemPickerOpen, setIsItemPickerOpen] = useState(false);
   const [withdrawType, setWithdrawType] = useState<WithdrawType>('issue');
   const [requesterName, setRequesterName] = useState('');
-  const [requesterPhone, setRequesterPhone] = useState('');
   const [withdrawDate, setWithdrawDate] = useState(getTodayInputValue);
   const [dueDate, setDueDate] = useState('');
   const [purpose, setPurpose] = useState('');
@@ -155,6 +154,7 @@ export function WithdrawPage() {
   const [photoNames, setPhotoNames] = useState<string[]>([]);
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
   const [withdrawQuantities, setWithdrawQuantities] = useState<Record<string, string>>({});
+  const [requesterNames, setRequesterNames] = useState<Record<string, string>>({});
   const [itemPickerQuery, setItemPickerQuery] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [returningWithdrawId, setReturningWithdrawId] = useState<string | null>(null);
@@ -233,12 +233,11 @@ export function WithdrawPage() {
           record.projectNo,
           record.projectName,
           record.requesterName,
-          record.requesterPhone,
           record.issuedByName,
           record.purpose,
           getWithdrawTypeLabel(record.type),
           getEffectiveStatus(record),
-          ...record.items.map((item) => `${item.receiveNo} ${item.itemNo} ${item.itemDescription} ${item.vendorName}`),
+          ...record.items.map((item) => `${item.receiveNo} ${item.itemNo} ${item.itemDescription} ${item.vendorName} ${item.requesterName}`),
         ]
           .join(' ')
           .toLowerCase()
@@ -263,9 +262,13 @@ export function WithdrawPage() {
       .map((item) => ({
         item,
         qty: Number(withdrawQuantities[getStockItemId(item)] || 0),
+        requesterName:
+          withdrawType === 'issue'
+            ? requesterNames[getStockItemId(item)]?.trim() || ''
+            : requesterName.trim(),
       }))
       .filter(({ qty }) => Number.isFinite(qty) && qty > 0);
-  }, [selectedItems, withdrawQuantities]);
+  }, [requesterName, requesterNames, selectedItems, withdrawQuantities, withdrawType]);
 
   const totalAvailableQty = useMemo(
     () => availableItems.reduce((sum, item) => sum + item.qty, 0),
@@ -277,6 +280,9 @@ export function WithdrawPage() {
     return Number.isFinite(qty) && qty > item.qty;
   });
 
+  const missingRequesterItem =
+    withdrawType === 'issue' ? selectedDraftItems.find(({ requesterName }) => !requesterName) : undefined;
+
   const withdrawUnavailableReason = !canCreateWithdraw
     ? `Withdraw creation is not available for ${roleLabel}.`
     : !activeProjectNo
@@ -284,29 +290,29 @@ export function WithdrawPage() {
       : availableItems.length === 0
         ? 'No available Store items with qty greater than 0 were found for the active project.'
         : '';
-  const withdrawSubmitDisabledReason = !requesterName.trim()
-    ? 'Please enter the requester or responsible person.'
-    : !requesterPhone.trim()
-      ? 'Please enter the requester phone number.'
+  const withdrawSubmitDisabledReason =
+    withdrawType === 'borrow' && !requesterName.trim()
+      ? 'Please enter the requester or responsible person.'
       : !withdrawDate.trim()
-        ? 'Please select the withdrawal date.'
-        : withdrawType === 'borrow' && !dueDate.trim()
-          ? 'Please select the return due date.'
-          : !purpose.trim()
-            ? 'Please enter the withdrawal purpose.'
-            : selectedItems.length === 0
-              ? 'Please select at least one Store item.'
-              : selectedDraftItems.length === 0
-                ? 'Please enter withdraw qty greater than 0 for at least one selected item.'
-                : invalidQtyItem
-                  ? `Withdraw qty for ${invalidQtyItem.receiveNo} is greater than available qty.`
-                  : '';
+          ? 'Please select the withdrawal date.'
+          : withdrawType === 'borrow' && !dueDate.trim()
+            ? 'Please select the return due date.'
+            : !purpose.trim()
+              ? 'Please enter the withdrawal purpose.'
+              : selectedItems.length === 0
+                ? 'Please select at least one Store item.'
+                : selectedDraftItems.length === 0
+                  ? 'Please enter withdraw qty greater than 0 for at least one selected item.'
+                  : missingRequesterItem
+                    ? `Please enter the requester or responsible person for ${missingRequesterItem.item.receiveNo}.`
+                    : invalidQtyItem
+                      ? `Withdraw qty for ${invalidQtyItem.receiveNo} is greater than available qty.`
+                      : '';
 
   const resetModalState = () => {
     photoUrls.forEach((url) => URL.revokeObjectURL(url));
     setWithdrawType('issue');
     setRequesterName('');
-    setRequesterPhone('');
     setWithdrawDate(getTodayInputValue());
     setDueDate('');
     setPurpose('');
@@ -315,6 +321,7 @@ export function WithdrawPage() {
     setPhotoNames([]);
     setSelectedItemIds([]);
     setWithdrawQuantities({});
+    setRequesterNames({});
     setItemPickerQuery('');
     setUploadError('');
     setSubmitError('');
@@ -377,12 +384,25 @@ export function WithdrawPage() {
     }));
   };
 
+  const handleRequesterNameChange = (stockItemId: string, value: string) => {
+    setSubmitError('');
+    setRequesterNames((current) => ({
+      ...current,
+      [stockItemId]: value,
+    }));
+  };
+
   const toggleSelectedItem = (stockItemId: string) => {
     setSubmitError('');
     setSelectedItemIds((current) => {
       if (current.includes(stockItemId)) {
         setWithdrawQuantities((quantities) => {
           const next = { ...quantities };
+          delete next[stockItemId];
+          return next;
+        });
+        setRequesterNames((names) => {
+          const next = { ...names };
           delete next[stockItemId];
           return next;
         });
@@ -401,6 +421,11 @@ export function WithdrawPage() {
     setSubmitError('');
     setSelectedItemIds((current) => current.filter((id) => id !== stockItemId));
     setWithdrawQuantities((current) => {
+      const next = { ...current };
+      delete next[stockItemId];
+      return next;
+    });
+    setRequesterNames((current) => {
       const next = { ...current };
       delete next[stockItemId];
       return next;
@@ -428,14 +453,13 @@ export function WithdrawPage() {
       await createWithdraw({
         projectNo: activeProjectNo,
         type: withdrawType,
-        requesterName,
-        requesterPhone,
         withdrawDate,
         purpose,
         dueDate: withdrawType === 'borrow' ? dueDate : undefined,
-        items: selectedDraftItems.map(({ item, qty }) => ({
+        items: selectedDraftItems.map(({ item, qty, requesterName }) => ({
           receiveNo: getStockItemId(item),
           qty,
+          requesterName,
         })),
         photos: photoFiles,
       });
@@ -465,12 +489,18 @@ export function WithdrawPage() {
   };
 
   const handleCancelWithdraw = async (record: WithdrawRecord) => {
-    if (cancellingWithdrawId || isReadOnly || record.status === 'Returned' || record.status === 'Cancelled') {
+    if (cancellingWithdrawId || !isMasterAdmin || record.status === 'Returned' || record.status === 'Cancelled') {
       return;
     }
 
     const confirmed = await showConfirm(
-      `ยืนยันการยกเลิกการเบิก ${record.withdrawNo}? จำนวนสินค้าจะถูกคืนกลับไปยัง Store ของโครงการที่ตัดยอดรายการนี้`
+      `ยืนยันการยกเลิกการเบิก ${record.withdrawNo}? จำนวนสินค้าจะถูกคืนกลับไปยัง Store ของโครงการที่ตัดยอดรายการนี้`,
+      {
+        title: 'ยืนยันการยกเลิกการเบิก',
+        variant: 'warning',
+        confirmLabel: 'ยืนยันยกเลิก',
+        cancelLabel: 'ไม่ใช่',
+      }
     );
     if (!confirmed) {
       return;
@@ -489,34 +519,23 @@ export function WithdrawPage() {
 
   return (
     <div>
-      <PageHeader
-        eyebrow="Stock"
-        title="เบิกสินค้า"
-        description={
-          activeProject
-            ? `Create and track stock withdrawals for Project ${activeProject.projectNo}. Borrowed items stay visible until returned.`
-            : 'Create stock withdrawals from the active project store.'
-        }
-        actions={
-          <>
-            <SearchField
-              value={query}
-              onChange={setQuery}
-              placeholder="ค้นหาเลขที่เบิก ผู้ขอเบิก หรือรายการสินค้า"
-            />
-            <button
-              className={styles.primaryButton}
-              type="button"
-              disabled={!canCreateWithdraw || !activeProjectNo}
-              onClick={handleOpenModal}
-              title={withdrawUnavailableReason || 'สร้างรายการเบิก'}
-            >
-              <PackageMinus size={16} />
-              <span>สร้างรายการเบิก</span>
-            </button>
-          </>
-        }
-      />
+      <div className={styles.toolbar}>
+        <SearchField
+          value={query}
+          onChange={setQuery}
+          placeholder="ค้นหาเลขที่เบิก ผู้ขอเบิก หรือรายการสินค้า"
+        />
+        <button
+          className={styles.primaryButton}
+          type="button"
+          disabled={!canCreateWithdraw || !activeProjectNo}
+          onClick={handleOpenModal}
+          title={withdrawUnavailableReason || 'สร้างรายการเบิก'}
+        >
+          <PackageMinus size={16} />
+          <span>สร้างรายการเบิก</span>
+        </button>
+      </div>
 
       {overdueRecords.length > 0 ? (
         <div className={styles.alertNotice}>
@@ -595,96 +614,91 @@ export function WithdrawPage() {
             <table className={`table compact ${styles.withdrawTable}`}>
               <thead>
                 <tr>
-                  <th>การดำเนินการ</th>
                   <th>เลขที่เบิก</th><th>ประเภท</th><th>ผู้ขอเบิก</th><th>วันที่ / กำหนดคืน</th><th>รายการ</th><th className="numeric">QTY</th><th>วัตถุประสงค์ / รูปภาพ</th><th>ผู้จ่าย</th><th>สถานะ</th>
+                  <th>การดำเนินการ</th>
                 </tr>
               </thead>
               <tbody>
-                {projectWithdrawRecords.map((record) => (
-                  <tr key={record.id}>
-                    <td>
-                      {record.status !== 'Returned' && record.status !== 'Cancelled' ? (
-                        <button
-                          type="button"
-                          className={styles.cancelButton}
-                          disabled={isReadOnly || cancellingWithdrawId === record.id}
-                          onClick={() => handleCancelWithdraw(record)}
-                          title={isReadOnly ? `บทบาท ${roleLabel} ไม่สามารถยกเลิกการเบิกได้` : 'ยกเลิกการเบิกและคืนสินค้าเข้าคลังโครงการ'}
-                        >
-                          {cancellingWithdrawId === record.id ? <span className={styles.spinner} /> : <X size={13} />}
-                          <span>{cancellingWithdrawId === record.id ? 'กำลังยกเลิก...' : 'ยกเลิก'}</span>
-                        </button>
+                {projectWithdrawRecords.flatMap((record) => (
+                  record.items.map((item, itemIndex) => (
+                    <tr key={`${record.id}-${item.stockItemId}`} className={itemIndex === 0 ? styles.withdrawRowStart : undefined}>
+                      {itemIndex === 0 ? (
+                        <>
+                          <td rowSpan={record.items.length}>
+                            <span className={styles.withdrawCode}>{record.withdrawNo}</span>
+                            <small className={styles.subText}>Doc: {record.projectShortNo}</small>
+                          </td>
+                          <td rowSpan={record.items.length}>
+                            <span className={record.type === 'borrow' ? styles.borrowType : styles.issueType}>
+                              {getWithdrawTypeLabel(record.type)}
+                            </span>
+                          </td>
+                          <td rowSpan={record.items.length}>
+                            <div className={styles.stackCell}>
+                              <strong>{record.requesterName || '-'}</strong>
+                            </div>
+                          </td>
+                          <td rowSpan={record.items.length}>
+                            <div className={styles.stackCell}>
+                              <strong>{formatDate(record.withdrawDate)}</strong>
+                              <span>{record.type === 'borrow' ? `Due ${formatDate(record.dueDate)}` : 'No return required'}</span>
+                            </div>
+                          </td>
+                        </>
                       ) : null}
-                    </td>
-                    <td>
-                      <span className={styles.withdrawCode}>{record.withdrawNo}</span>
-                      <small className={styles.subText}>Doc: {record.projectShortNo}</small>
-                    </td>
-                    <td>
-                      <span className={record.type === 'borrow' ? styles.borrowType : styles.issueType}>
-                        {getWithdrawTypeLabel(record.type)}
-                      </span>
-                    </td>
-                    <td>
-                      <div className={styles.stackCell}>
-                        <strong>{record.requesterName || '-'}</strong>
-                        <span>{record.requesterPhone || '-'}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <div className={styles.stackCell}>
-                        <strong>{formatDate(record.withdrawDate)}</strong>
-                        <span>{record.type === 'borrow' ? `Due ${formatDate(record.dueDate)}` : 'No return required'}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <div className={styles.itemStack}>
-                        {record.items.map((item) => (
-                          <span key={`${record.id}-${item.stockItemId}`} className={styles.itemChip}>
-                            {item.itemDescription}
-                          </span>
-                        ))}
-                      </div>
-                    </td>
-                    <td className={`numeric ${styles.withdrawQtyCell}`}>
-                      <div className={styles.qtyStack}>
-                        {record.items.map((item) => (
-                          <span key={`${record.id}-qty-${item.stockItemId}`}>{item.qty.toLocaleString()}</span>
-                        ))}
-                      </div>
-                    </td>
-                    <td>
-                      <div className={styles.stackCell}>
-                        <span>{record.purpose || '-'}</span>
-                        {record.photoUrls.length > 0 ? (
-                          <div className={styles.photoList}>
-                            {record.photoUrls.map((url, index) => (
-                              <a
-                                key={`${record.id}-${index}`}
-                                href={url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className={styles.photoLink}
+                      <td className={styles.withdrawItemCell}>{item.itemDescription || '-'}</td>
+                      <td className={`numeric ${styles.withdrawQtyCell}`}>{item.qty.toLocaleString()}</td>
+                      {itemIndex === 0 ? (
+                        <>
+                          <td rowSpan={record.items.length}>
+                            <div className={styles.stackCell}>
+                              <span>{record.purpose || '-'}</span>
+                              {record.photoUrls.length > 0 ? (
+                                <div className={styles.photoList}>
+                                  {record.photoUrls.map((url, index) => (
+                                    <a
+                                      key={`${record.id}-${index}`}
+                                      href={url}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className={styles.photoLink}
+                                    >
+                                      Photo {index + 1}
+                                    </a>
+                                  ))}
+                                </div>
+                              ) : (
+                                <span className={styles.subText}>ไม่มีรูปภาพ</span>
+                              )}
+                            </div>
+                          </td>
+                          <td rowSpan={record.items.length}>
+                            <div className={styles.stackCell}>
+                              <strong>{record.issuedByName || '-'}</strong>
+                              <span>{formatDateTime(record.createdAt)}</span>
+                            </div>
+                          </td>
+                          <td rowSpan={record.items.length}>
+                            <StatusBadge status={getEffectiveStatus(record)} />
+                          </td>
+                          <td rowSpan={record.items.length}>
+                            {isMasterAdmin && record.status !== 'Returned' && record.status !== 'Cancelled' ? (
+                              <button
+                                type="button"
+                                className={styles.cancelButton}
+                                disabled={cancellingWithdrawId === record.id}
+                                onClick={() => handleCancelWithdraw(record)}
+                                title="ยกเลิกการเบิกและคืนสินค้าเข้าคลังโครงการ"
                               >
-                                Photo {index + 1}
-                              </a>
-                            ))}
-                          </div>
-                        ) : (
-                          <span className={styles.subText}>ไม่มีรูปภาพ</span>
-                        )}
-                      </div>
-                    </td>
-                    <td>
-                      <div className={styles.stackCell}>
-                        <strong>{record.issuedByName || '-'}</strong>
-                        <span>{formatDateTime(record.createdAt)}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <StatusBadge status={getEffectiveStatus(record)} />
-                    </td>
-                  </tr>
+                                {cancellingWithdrawId === record.id ? <span className={styles.spinner} /> : <X size={13} />}
+                                <span>{cancellingWithdrawId === record.id ? 'กำลังยกเลิก...' : 'ยกเลิก'}</span>
+                              </button>
+                            ) : null}
+                          </td>
+                        </>
+                      ) : null}
+                    </tr>
+                  ))
                 ))}
                 {projectWithdrawRecords.length === 0 ? (
                   <tr>
@@ -726,7 +740,6 @@ export function WithdrawPage() {
                       <td>
                         <div className={styles.stackCell}>
                           <strong>{record.requesterName || '-'}</strong>
-                          <span>{record.requesterPhone || '-'}</span>
                         </div>
                       </td>
                       <td>{formatDate(record.dueDate)}</td>
@@ -778,7 +791,7 @@ export function WithdrawPage() {
 
       {isModalOpen ? (
         <div className={styles.modalOverlay}>
-          <div className={styles.modal}>
+          <div className={`${styles.modal} ${withdrawType === 'issue' ? styles.modalIssue : styles.modalBorrow}`}>
             <div className={styles.modalHeader}>
               <div>
                 <h3>สร้างรายการเบิกสินค้า</h3>
@@ -798,7 +811,7 @@ export function WithdrawPage() {
               <div className={styles.segmentedControl} role="group" aria-label="Withdraw type">
                 <button
                   type="button"
-                  className={`${styles.segmentButton} ${withdrawType === 'issue' ? styles.segmentButtonActive : ''}`}
+                  className={`${styles.segmentButton} ${styles.segmentButtonIssue} ${withdrawType === 'issue' ? styles.segmentButtonActive : ''}`}
                   onClick={() => {
                     setWithdrawType('issue');
                     setDueDate('');
@@ -809,7 +822,7 @@ export function WithdrawPage() {
                 </button>
                 <button
                   type="button"
-                  className={`${styles.segmentButton} ${withdrawType === 'borrow' ? styles.segmentButtonActive : ''}`}
+                  className={`${styles.segmentButton} ${styles.segmentButtonBorrow} ${withdrawType === 'borrow' ? styles.segmentButtonActive : ''}`}
                   onClick={() => setWithdrawType('borrow')}
                 >
                   <RotateCcw size={16} />
@@ -818,27 +831,18 @@ export function WithdrawPage() {
               </div>
 
               <div className={styles.formGrid}>
-                <label className={styles.field}>
-                  <span>ผู้ขอเบิก / ผู้รับผิดชอบ</span>
-                  <input
-                    className={styles.input}
-                    type="text"
-                    value={requesterName}
-                    onChange={(event) => setRequesterName(event.target.value)}
-                    placeholder="ชื่อผู้ขอเบิก"
-                  />
-                </label>
-
-                <label className={styles.field}>
-                  <span>โทรศัพท์ผู้ขอเบิก</span>
-                  <input
-                    className={styles.input}
-                    type="tel"
-                    value={requesterPhone}
-                    onChange={(event) => setRequesterPhone(event.target.value)}
-                    placeholder="หมายเลขโทรศัพท์"
-                  />
-                </label>
+                {withdrawType === 'borrow' ? (
+                  <label className={styles.field}>
+                    <span>ผู้ขอเบิก / ผู้รับผิดชอบ</span>
+                    <input
+                      className={styles.input}
+                      type="text"
+                      value={requesterName}
+                      onChange={(event) => setRequesterName(event.target.value)}
+                      placeholder="ชื่อผู้ขอเบิก"
+                    />
+                  </label>
+                ) : null}
 
                 <label className={styles.field}>
                   <span>วันที่เบิก</span>
@@ -880,9 +884,11 @@ export function WithdrawPage() {
                     No items selected. Click Select to choose available Store items from this project.
                   </div>
                 ) : (
-                  <div className={styles.selectedItemsTable}>
+                  <div className={`${styles.selectedItemsTable} ${withdrawType === 'issue' ? styles.selectedItemsTableIssue : ''}`}>
                     <div className={styles.selectedItemsHead}>
-                      <span>เลขที่รับ</span><span>รายการ</span><span>คงเหลือ</span><span>จำนวนเบิก</span><span>การดำเนินการ</span>
+                      <span>เลขที่รับ</span><span>รายการ</span><span>คงเหลือ</span><span>จำนวนเบิก</span>
+                      {withdrawType === 'issue' ? <span>ผู้ขอเบิก / ผู้รับผิดชอบ</span> : null}
+                      <span>การดำเนินการ</span>
                     </div>
                     <div className={styles.selectedItemsBody}>
                       {selectedItems.map((item) => {
@@ -904,6 +910,15 @@ export function WithdrawPage() {
                               onChange={(event) => handleQtyChange(stockItemId, event.target.value)}
                               placeholder="0"
                             />
+                            {withdrawType === 'issue' ? (
+                              <input
+                                className={styles.input}
+                                type="text"
+                                value={requesterNames[stockItemId] ?? ''}
+                                onChange={(event) => handleRequesterNameChange(stockItemId, event.target.value)}
+                                placeholder="ชื่อผู้ขอเบิก"
+                              />
+                            ) : null}
                             <button
                               className={styles.removeItemButton}
                               type="button"

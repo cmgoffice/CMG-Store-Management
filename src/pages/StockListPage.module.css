@@ -23,6 +23,70 @@
   padding: 0 14px;
 }
 
+.toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 12px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.paginationSummary {
+  white-space: nowrap;
+}
+
+.paginationActions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.pageSizeControl {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+
+.pageSizeControl .select {
+  min-height: 34px;
+  padding-inline: 8px;
+}
+
+.paginationButton {
+  min-height: 34px;
+  border: 1px solid var(--color-outline-variant);
+  border-radius: 4px;
+  background: var(--color-panel);
+  color: var(--color-text);
+  padding: 0 10px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.paginationButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.paginationPage {
+  min-width: 70px;
+  color: var(--color-text);
+  text-align: center;
+  white-space: nowrap;
+}
+
 .availabilityBadge {
   display: inline-flex;
   align-items: center;
@@ -162,6 +226,202 @@
   padding: 10px 0 14px;
 }
 
+.detailHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 8px 10px;
+}
+
+.detailHeader strong {
+  display: block;
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.itemCodeLabel {
+  display: block;
+  margin-top: 2px;
+  color: #686276;
+  font-size: 11px;
+}
+
+.editButton,
+.saveButton,
+.cancelButton,
+.closeButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.editButton {
+  flex: 0 0 auto;
+  min-height: 30px;
+  border: 1px solid #d8d0ff;
+  border-radius: 6px;
+  background: #f5f2ff;
+  color: var(--color-primary-container);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.editButton:hover,
+.editButton:focus-visible {
+  background: #ebe6ff;
+}
+
+.modalBackdrop {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgb(26 21 46 / 36%);
+  padding: 20px;
+}
+
+.editModal {
+  width: min(100%, 440px);
+  border: 1px solid #e4e1ef;
+  border-radius: 12px;
+  background: var(--color-panel);
+  box-shadow: 0 20px 50px rgb(34 24 72 / 20%);
+  padding: 22px;
+}
+
+.editModalHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.editModalHeader h2 {
+  margin: 3px 0 0;
+  color: var(--color-text);
+  font-size: 18px;
+}
+
+.editModalEyebrow {
+  color: var(--color-primary-container);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.closeButton {
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  background: transparent;
+  color: #686276;
+}
+
+.closeButton:hover,
+.closeButton:focus-visible {
+  background: #f0eef7;
+  color: var(--color-text);
+}
+
+.formField,
+.readOnlyField {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 14px;
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.formField input {
+  min-height: 40px;
+  border: 1px solid var(--color-outline-variant);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--color-text);
+  padding: 0 11px;
+  font: inherit;
+  font-weight: 500;
+  outline: none;
+}
+
+.formField input:focus {
+  border-color: var(--color-primary-container);
+  box-shadow: 0 0 0 3px rgb(79 46 217 / 12%);
+}
+
+.readOnlyField {
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  column-gap: 10px;
+  border: 1px dashed #d8d4e4;
+  border-radius: 6px;
+  background: #faf9fd;
+  padding: 10px 11px;
+}
+
+.readOnlyField strong {
+  font-size: 14px;
+}
+
+.readOnlyField small {
+  grid-column: 1 / -1;
+  color: #686276;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.editError {
+  margin: 0 0 14px;
+  color: #c50f1f;
+  font-size: 12px;
+}
+
+.editModalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.cancelButton,
+.saveButton {
+  min-height: 38px;
+  border-radius: 6px;
+  padding: 0 14px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cancelButton {
+  border: 1px solid var(--color-outline-variant);
+  background: #fff;
+  color: var(--color-text);
+}
+
+.saveButton {
+  background: var(--color-primary-container);
+  color: #fff;
+}
+
+.saveButton:disabled,
+.cancelButton:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
 .detailTable {
   width: 100%;
   border-collapse: collapse;
@@ -195,9 +455,30 @@
 }
 
 @media (max-width: 720px) {
+  .toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .select,
   .primaryButton {
     width: 100%;
     justify-content: center;
+  }
+
+  .pagination,
+  .paginationActions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .paginationSummary,
+  .pageSizeControl {
+    justify-content: space-between;
+  }
+
+  .paginationButton,
+  .paginationPage {
+    width: 100%;
   }
 }
