@@ -40,6 +40,7 @@ export function Header({ menuButton, pendingTasks }: HeaderProps) {
   const { showAlert } = useDialog();
   const { language, setLanguage } = useLanguage();
   const selectedItemType = getItemTypeOption(searchParams.get('itemType') ?? '')?.code ?? '';
+  const searchQuery = searchParams.get('search') ?? '';
   const activeMenuTitle = getActiveMenuTitle(location.pathname);
 
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
@@ -79,6 +80,18 @@ export function Header({ menuButton, pendingTasks }: HeaderProps) {
       nextSearchParams.set('itemType', itemType);
     } else {
       nextSearchParams.delete('itemType');
+    }
+
+    setSearchParams(nextSearchParams, { replace: true });
+  };
+
+  const handleSearchChange = (value: string) => {
+    const nextSearchParams = new URLSearchParams(searchParams);
+
+    if (value.trim()) {
+      nextSearchParams.set('search', value);
+    } else {
+      nextSearchParams.delete('search');
     }
 
     setSearchParams(nextSearchParams, { replace: true });
@@ -144,7 +157,13 @@ export function Header({ menuButton, pendingTasks }: HeaderProps) {
               ))}
             </optgroup>
           </select>
-          <input type="search" placeholder="ค้นหาที่นี่..." />
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={(event) => handleSearchChange(event.target.value)}
+            placeholder="ค้นหาที่นี่..."
+            aria-label="ค้นหาสินค้าด้วยรหัสหรือชื่อ"
+          />
           <Search size={18} aria-hidden="true" />
         </label>
 

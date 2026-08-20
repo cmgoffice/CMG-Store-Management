@@ -253,6 +253,7 @@
 .editButton,
 .saveButton,
 .cancelButton,
+.deleteButton,
 .closeButton {
   display: inline-flex;
   align-items: center;
@@ -397,7 +398,8 @@
 }
 
 .cancelButton,
-.saveButton {
+.saveButton,
+.deleteButton {
   min-height: 38px;
   border-radius: 6px;
   padding: 0 14px;
@@ -411,13 +413,26 @@
   color: var(--color-text);
 }
 
+.deleteButton {
+  margin-right: auto;
+  border: 1px solid #f2b8b5;
+  background: #fff5f4;
+  color: #b3261e;
+}
+
+.deleteButton:hover,
+.deleteButton:focus-visible {
+  background: #ffe9e7;
+}
+
 .saveButton {
   background: var(--color-primary-container);
   color: #fff;
 }
 
 .saveButton:disabled,
-.cancelButton:disabled {
+.cancelButton:disabled,
+.deleteButton:disabled {
   cursor: not-allowed;
   opacity: 0.6;
 }
@@ -454,6 +469,124 @@
   border-right: 1px dashed #d8deea;
 }
 
+.historyLink {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-primary-container);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-color: #c9c0f5;
+  text-underline-offset: 2px;
+}
+
+.historyLink:hover,
+.historyLink:focus-visible {
+  color: #322092;
+  text-decoration-color: currentColor;
+}
+
+.withdrawDetailModal {
+  width: min(1280px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow: auto;
+}
+
+.withdrawDetailGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.withdrawDetailCard {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+  padding: 11px 12px;
+  border: 1px solid #e7e3f1;
+  border-radius: 8px;
+  background: #faf9fd;
+}
+
+.withdrawDetailCard span {
+  color: #686276;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.withdrawDetailCard strong {
+  overflow: hidden;
+  color: var(--color-text);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.withdrawDetailCard small {
+  overflow: hidden;
+  color: #817b91;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.withdrawDetailWide {
+  grid-column: 1 / -1;
+}
+
+.withdrawDetailItems {
+  margin-top: 18px;
+  overflow-x: auto;
+}
+
+.withdrawDetailItems h3 {
+  margin: 0 0 8px;
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.withdrawDetailItems .detailTable {
+  width: 100%;
+  min-width: 1080px;
+  table-layout: fixed;
+}
+
+.withdrawDetailItems .detailTable th,
+.withdrawDetailItems .detailTable td {
+  overflow-wrap: anywhere;
+  vertical-align: top;
+  white-space: normal;
+}
+
+.withdrawDetailItems .detailTable th:nth-child(1),
+.withdrawDetailItems .detailTable td:nth-child(1) {
+  width: 145px;
+}
+
+.withdrawDetailItems .detailTable th:nth-child(2),
+.withdrawDetailItems .detailTable td:nth-child(2) {
+  width: 34%;
+}
+
+.withdrawDetailItems .detailTable th:nth-child(3),
+.withdrawDetailItems .detailTable td:nth-child(3) {
+  width: 220px;
+}
+
+.withdrawDetailItems .detailTable th:nth-child(4),
+.withdrawDetailItems .detailTable td:nth-child(4) {
+  width: 180px;
+}
+
+.withdrawDetailItems .detailTable th:nth-child(5),
+.withdrawDetailItems .detailTable td:nth-child(5),
+.withdrawDetailItems .detailTable th:nth-child(6),
+.withdrawDetailItems .detailTable td:nth-child(6) {
+  width: 105px;
+}
+
 @media (max-width: 720px) {
   .toolbar {
     align-items: stretch;
@@ -480,5 +613,13 @@
   .paginationButton,
   .paginationPage {
     width: 100%;
+  }
+
+  .withdrawDetailGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .withdrawDetailWide {
+    grid-column: auto;
   }
 }

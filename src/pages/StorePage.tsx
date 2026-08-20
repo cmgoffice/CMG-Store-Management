@@ -1,11 +1,12 @@
-import { ChevronDown, ChevronRight, Pencil, X } from 'lucide-react';
-import { Fragment, useMemo, useState, type FormEvent } from 'react';
+import { ChevronDown, ChevronRight, Pencil, Trash2, X } from 'lucide-react';
+import { Fragment, useEffect, useMemo, useState, type FormEvent } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { SearchField } from '../components/SearchField';
+import { StatusBadge } from '../components/StatusBadge';
 import { getItemTypeOption, matchesItemType } from '../constants/itemTypes';
 import { useInventory } from '../context/InventoryContext';
 import { useRole } from '../context/RoleContext';
-import type { StockItem } from '../types/models';
+import type { StockItem, WithdrawRecord } from '../types/models';
 import '../styles/tables.css';
 import styles from './StockListPage.module.css';
 
@@ -16,7 +17,8 @@ type StoreReceiveHistory = {
   receiveDate: string;
   prNo: string;
   form: string;
-  receivedByName: string;
+  personName: string;
+  withdrawId?: string;
   qty: number;
   amount: number;
   sortValue: number;
@@ -37,8 +39,14 @@ type AggregatedStoreItem = {
   history: StoreReceiveHistory[];
 };
 
+const PAGE_SIZE_OPTIONS = [100, 150, 200] as const;
+
 function normalizeLookupKey(value: unknown) {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
+
+function getStockItemLookupKey(stockItemId: unknown, receiveNo: unknown) {
+  return normalizeLookupKey(stockItemId) || normalizeLookupKey(receiveNo);
 }
 
 function normalizeProjectNo(value: unknown) {
@@ -151,19 +159,41 @@ export function StorePage() {
     withdrawRecords,
     activeProjectNo,
     updateProjectStockItem,
+    deleteProjectStockItem,
   } = useInventory();
   const { hasRole } = useRole();
   const isMasterAdmin = hasRole('MasterAdmin');
-  const [query, setQuery] = useState('');
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [query, setQuery] = useState(searchParams.get('search') ?? '');
   const selectedItemType = getItemTypeOption(searchParams.get('itemType') ?? '')?.code ?? '';
   const [expandedItemIds, setExpandedItemIds] = useState<string[]>([]);
+  const [pageSize, setPageSize] = useState<(typeof PAGE_SIZE_OPTIONS)[number]>(100);
+  const [currentPage, setCurrentPage] = useState(1);
   const [editingItem, setEditingItem] = useState<AggregatedStoreItem | null>(null);
   const [editItemNo, setEditItemNo] = useState('');
   const [editItemDescription, setEditItemDescription] = useState('');
   const [editError, setEditError] = useState('');
   const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [selectedWithdraw, setSelectedWithdraw] = useState<WithdrawRecord | null>(null);
   const normalizedActiveProjectNo = normalizeProjectNo(activeProjectNo);
+
+  const handleQueryChange = (value: string) => {
+    setQuery(value);
+    const nextSearchParams = new URLSearchParams(searchParams);
+
+    if (value.trim()) {
+      nextSearchParams.set('search', value);
+    } else {
+      nextSearchParams.delete('search');
+    }
+
+    setSearchParams(nextSearchParams, { replace: true });
+  };
+
+  useEffect(() => {
+    const nextQuery = searchParams.get('search') ?? '';
+    setQuery((currentQuery) => (currentQuery === nextQuery ? currentQuery : nextQuery));
+  }, [searchParams]);
 
   const filteredItems = useMemo<AggregatedStoreItem[]>(() => {
     const normalized = query.trim().toLowerCase();
@@ -182,16 +212,11 @@ export function StorePage() {
     };
 
     withdrawRecords.forEach((record) => {
-      record.itemReceiveNos
-        .map((value) => normalizeLookupKey(value))
-        .filter(Boolean)
-        .forEach((key) => addWithdrawLookup(key, record));
-
       record.items.forEach((withdrawItem) => {
-        [withdrawItem.stockItemId, withdrawItem.receiveNo]
-          .map((value) => normalizeLookupKey(value))
-          .filter(Boolean)
-          .forEach((key) => addWithdrawLookup(key, record));
+        const key = getStockItemLookupKey(withdrawItem.stockItemId, withdrawItem.receiveNo);
+        if (key) {
+          addWithdrawLookup(key, record);
+        }
       });
     });
 
@@ -348,27 +373,30 @@ export function StorePage() {
               receiveDate: formatBangkokDateTime(rawReceiveDate),
               prNo,
               form,
-              receivedByName,
+              personName: receivedByName,
               qty: item.qty,
               amount: item.amount,
               sortValue: getDateSortValue(rawReceiveDate),
               movementType: 'receive',
             };
-            const matchedWithdrawals = new Map<string, (typeof withdrawRecords)[number]>();
-            requestKeys.forEach((key) => {
-              withdrawByItemKey.get(key)?.forEach((record) => matchedWithdrawals.set(record.id, record));
-            });
-            const withdrawHistory = Array.from(matchedWithdrawals.values()).flatMap((record) => (
+            // Withdrawal records refer to a concrete stock item. Do not use
+            // receiving-document keys here because one PR/PO can contain
+            // multiple different stock items and withdrawals.
+            const stockItemKey = getStockItemLookupKey(item.stockItemId, item.receiveNo);
+            const matchedWithdrawals = (withdrawByItemKey.get(stockItemKey) ?? [])
+              .filter((record) => normalizeProjectNo(record.projectNo) === normalizedActiveProjectNo);
+            const withdrawHistory = matchedWithdrawals.flatMap((record) => (
               record.items
-                .filter((withdrawItem) => [withdrawItem.stockItemId, withdrawItem.receiveNo]
-                  .map((value) => normalizeLookupKey(value))
-                  .some((key) => requestKeys.includes(key)))
+                .filter((withdrawItem) => (
+                  getStockItemLookupKey(withdrawItem.stockItemId, withdrawItem.receiveNo) === stockItemKey
+                ))
                 .map((withdrawItem) => ({
                   id: `${record.id}-${withdrawItem.stockItemId}`,
                   receiveDate: formatBangkokDateTime(record.withdrawDate || record.createdAt),
                   prNo: record.withdrawNo,
                   form: record.type === 'borrow' ? 'Withdraw / Borrow' : 'Withdraw / Issue',
-                  receivedByName: record.requesterName || record.issuedByName || '-',
+                  personName: withdrawItem.requesterName || record.requesterName || record.issuedByName || '-',
+                  withdrawId: record.id,
                   qty: -withdrawItem.qty,
                   amount: -withdrawItem.amount,
                   sortValue: getDateSortValue(record.withdrawDate || record.createdAt),
@@ -385,10 +413,19 @@ export function StorePage() {
           vendorName,
           representative.itemDescription,
           representative.itemNo,
+          representative.materialNo,
+          representative.iditem,
           normalizedActiveProjectNo,
           String(group.qty),
-          ...history.flatMap((entry) => [entry.prNo, entry.form, entry.receivedByName, entry.receiveDate]),
-          ...group.items.flatMap((item) => [item.receiveNo, item.prNo, item.poNo]),
+          ...history.flatMap((entry) => [entry.prNo, entry.form, entry.personName, entry.receiveDate]),
+          ...group.items.flatMap((item) => [
+            item.receiveNo,
+            item.prNo,
+            item.poNo,
+            item.itemNo,
+            item.materialNo,
+            item.iditem,
+          ]),
         ]
           .join(' ')
           .toLowerCase();
@@ -409,11 +446,39 @@ export function StorePage() {
       })
       .filter((item) => !normalized || item.searchText.includes(normalized))
       .sort((left, right) => {
+        if (left.availability !== right.availability) {
+          return left.availability === 'Available' ? -1 : 1;
+        }
+
         const leftSortValue = left.history[0]?.sortValue ?? 0;
         const rightSortValue = right.history[0]?.sortValue ?? 0;
         return rightSortValue - leftSortValue;
       });
   }, [dispatchRecords, normalizedActiveProjectNo, query, receivingRequests, selectedItemType, stockItems, withdrawRecords]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const paginatedItems = useMemo(
+    () => filteredItems.slice((safeCurrentPage - 1) * pageSize, safeCurrentPage * pageSize),
+    [filteredItems, pageSize, safeCurrentPage]
+  );
+  const firstVisibleItem = filteredItems.length === 0 ? 0 : (safeCurrentPage - 1) * pageSize + 1;
+  const lastVisibleItem = Math.min(safeCurrentPage * pageSize, filteredItems.length);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [normalizedActiveProjectNo, query, selectedItemType]);
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, totalPages));
+  }, [totalPages]);
+
+  const handlePageSizeChange = (nextPageSize: number) => {
+    if (PAGE_SIZE_OPTIONS.includes(nextPageSize as (typeof PAGE_SIZE_OPTIONS)[number])) {
+      setPageSize(nextPageSize as (typeof PAGE_SIZE_OPTIONS)[number]);
+      setCurrentPage(1);
+    }
+  };
 
   const handleToggleExpand = (itemId: string) => {
     setExpandedItemIds((current) =>
@@ -466,12 +531,39 @@ export function StorePage() {
     }
   };
 
+  const handleDeleteItem = async () => {
+    if (!editingItem || !normalizedActiveProjectNo || !isMasterAdmin || isSavingEdit) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `ยืนยันการลบรายการ "${editingItem.itemDescription}" จำนวน ${editingItem.stockItemIds.length} รายการใช่หรือไม่?\nข้อมูลจะถูกย้ายไป deleteitemhistory`
+    );
+    if (!confirmed) {
+      return;
+    }
+
+    setIsSavingEdit(true);
+    setEditError('');
+    try {
+      await deleteProjectStockItem({
+        projectNo: normalizedActiveProjectNo,
+        stockItemIds: editingItem.stockItemIds,
+      });
+      setEditingItem(null);
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : 'ไม่สามารถลบรายการสินค้าได้');
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
   return (
     <div>
       <div className={styles.toolbar}>
         <SearchField
           value={query}
-          onChange={setQuery}
+          onChange={handleQueryChange}
           placeholder="ค้นหารายการสินค้าในคลัง"
         />
       </div>
@@ -490,7 +582,7 @@ export function StorePage() {
             </tr>
           </thead>
           <tbody>
-            {filteredItems.map((item, index) => {
+            {paginatedItems.map((item, index) => {
               const isExpanded = expandedItemIds.includes(item.id);
 
               return (
@@ -499,7 +591,7 @@ export function StorePage() {
                     className={styles.expandableRow}
                     onClick={() => handleToggleExpand(item.id)}
                   >
-                    <td className={styles.noColumn}>{index + 1}</td>
+                    <td className={styles.noColumn}>{(safeCurrentPage - 1) * pageSize + index + 1}</td>
                     <td className={styles.itemSummaryCell}>
                       <button
                         type="button"
@@ -559,7 +651,7 @@ export function StorePage() {
                           <table className={styles.detailTable}>
                             <thead>
                               <tr>
-                                <th>ลำดับ</th><th>วันที่รับ</th><th>เลขที่ PR</th><th>รูปแบบ</th><th>ผู้รับสินค้า</th><th className="numeric">จำนวน</th><th className="numeric">มูลค่า</th>
+                                <th>ลำดับ</th><th>วันที่</th><th>เลขที่ PR / เลขที่เบิก</th><th>รูปแบบ</th><th>ผู้เบิก / ผู้รับสินค้า</th><th className="numeric">จำนวน</th><th className="numeric">มูลค่า</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -567,9 +659,26 @@ export function StorePage() {
                                 <tr key={historyItem.id}>
                                   <td>{historyIndex + 1}</td>
                                   <td>{historyItem.receiveDate}</td>
-                                  <td>{historyItem.prNo}</td>
+                                  <td>
+                                    {historyItem.withdrawId ? (
+                                      <button
+                                        type="button"
+                                        className={styles.historyLink}
+                                        onClick={(event) => {
+                                          event.stopPropagation();
+                                          const record = withdrawRecords.find((withdraw) => withdraw.id === historyItem.withdrawId);
+                                          if (record) {
+                                            setSelectedWithdraw(record);
+                                          }
+                                        }}
+                                        title="ดูรายละเอียดการเบิก"
+                                      >
+                                        {historyItem.prNo}
+                                      </button>
+                                    ) : historyItem.prNo}
+                                  </td>
                                   <td>{historyItem.form}</td>
-                                  <td>{historyItem.receivedByName}</td>
+                                  <td>{historyItem.personName}</td>
                                   <td className="numeric">{historyItem.qty.toLocaleString()}</td>
                                   <td className="numeric">{historyItem.amount.toLocaleString()}</td>
                                 </tr>
@@ -596,6 +705,105 @@ export function StorePage() {
           </tbody>
         </table>
       </div>
+
+      <div className={styles.pagination}>
+        <div className={styles.paginationSummary}>
+          แสดง {firstVisibleItem.toLocaleString()}-{lastVisibleItem.toLocaleString()} จาก{' '}
+          {filteredItems.length.toLocaleString()} รายการ
+        </div>
+        <div className={styles.paginationActions}>
+          <label className={styles.pageSizeControl}>
+            <span>รายการต่อหน้า</span>
+            <select
+              className={styles.select}
+              value={pageSize}
+              onChange={(event) => handlePageSizeChange(Number(event.target.value))}
+              aria-label="จำนวนรายการต่อหน้า"
+            >
+              {PAGE_SIZE_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            type="button"
+            className={styles.paginationButton}
+            onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+            disabled={safeCurrentPage === 1}
+          >
+            ก่อนหน้า
+          </button>
+          <span className={styles.paginationPage}>
+            หน้า {safeCurrentPage.toLocaleString()} / {totalPages.toLocaleString()}
+          </span>
+          <button
+            type="button"
+            className={styles.paginationButton}
+            onClick={() => setCurrentPage((page) => Math.min(totalPages, page + 1))}
+            disabled={safeCurrentPage === totalPages}
+          >
+            ถัดไป
+          </button>
+        </div>
+      </div>
+
+      {selectedWithdraw ? (
+        <div className={styles.modalBackdrop} role="presentation" onMouseDown={() => setSelectedWithdraw(null)}>
+          <section
+            className={`${styles.editModal} ${styles.withdrawDetailModal}`}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="store-withdraw-detail-title"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <div className={styles.editModalHeader}>
+              <div>
+                <span className={styles.editModalEyebrow}>WITHDRAW DETAIL</span>
+                <h2 id="store-withdraw-detail-title">รายละเอียดการเบิก {selectedWithdraw.withdrawNo}</h2>
+              </div>
+              <button type="button" className={styles.closeButton} onClick={() => setSelectedWithdraw(null)} aria-label="ปิดรายละเอียดการเบิก">
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className={styles.withdrawDetailGrid}>
+              <div className={styles.withdrawDetailCard}><span>ประเภท</span><strong>{selectedWithdraw.type === 'borrow' ? 'ยืม / รอคืน' : 'เบิกจ่าย'}</strong></div>
+              <div className={styles.withdrawDetailCard}><span>สถานะ</span><StatusBadge status={selectedWithdraw.status} /></div>
+              <div className={styles.withdrawDetailCard}><span>โครงการ</span><strong>{selectedWithdraw.projectNo}</strong><small>{selectedWithdraw.projectName || '-'}</small></div>
+              <div className={styles.withdrawDetailCard}><span>วันที่เบิก</span><strong>{formatBangkokDateTime(selectedWithdraw.withdrawDate)}</strong></div>
+              <div className={styles.withdrawDetailCard}><span>ผู้จ่าย</span><strong>{selectedWithdraw.issuedByName || '-'}</strong></div>
+              <div className={styles.withdrawDetailCard}><span>ผู้ขอเบิก</span><strong>{selectedWithdraw.requesterName || '-'}</strong></div>
+              {selectedWithdraw.type === 'borrow' ? <div className={styles.withdrawDetailCard}><span>กำหนดคืน</span><strong>{selectedWithdraw.dueDate ? formatBangkokDateTime(selectedWithdraw.dueDate) : '-'}</strong></div> : null}
+              <div className={`${styles.withdrawDetailCard} ${styles.withdrawDetailWide}`}><span>วัตถุประสงค์</span><strong>{selectedWithdraw.purpose || '-'}</strong></div>
+            </div>
+
+            <div className={styles.withdrawDetailItems}>
+              <h3>รายการสินค้า</h3>
+              <table className={styles.detailTable}>
+                <thead><tr><th>รหัสสินค้า</th><th>รายละเอียด</th><th>เลขที่รับเข้า</th><th>ผู้เบิก</th><th className="numeric">จำนวน</th><th className="numeric">มูลค่า</th></tr></thead>
+                <tbody>
+                  {selectedWithdraw.items.map((withdrawItem) => (
+                    <tr key={`${selectedWithdraw.id}-${withdrawItem.stockItemId}`}>
+                      <td>{withdrawItem.itemNo || '-'}</td>
+                      <td>{withdrawItem.itemDescription || '-'}</td>
+                      <td>{withdrawItem.receiveNo || '-'}</td>
+                      <td>{withdrawItem.requesterName || selectedWithdraw.requesterName || '-'}</td>
+                      <td className="numeric">{withdrawItem.qty.toLocaleString()} {withdrawItem.unit || ''}</td>
+                      <td className="numeric">{withdrawItem.amount.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className={styles.editModalActions}>
+              <button type="button" className={styles.cancelButton} onClick={() => setSelectedWithdraw(null)}>ปิดรายละเอียด</button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {editingItem ? (
         <div
@@ -654,6 +862,15 @@ export function StorePage() {
             {editError ? <p className={styles.editError}>{editError}</p> : null}
 
             <div className={styles.editModalActions}>
+              <button
+                type="button"
+                className={styles.deleteButton}
+                onClick={handleDeleteItem}
+                disabled={isSavingEdit}
+              >
+                <Trash2 size={14} />
+                ลบรายการ
+              </button>
               <button type="button" className={styles.cancelButton} onClick={handleCloseEdit} disabled={isSavingEdit}>
                 ยกเลิก
               </button>

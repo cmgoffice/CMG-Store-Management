@@ -95,6 +95,11 @@ interface UpdateProjectStockItemInput {
   itemDescription: string;
 }
 
+interface DeleteProjectStockItemInput {
+  projectNo: string;
+  stockItemIds: string[];
+}
+
 interface CreateWithdrawLineInput {
   receiveNo: string;
   qty: number;
@@ -162,6 +167,7 @@ interface InventoryContextValue {
   receiveNewItem: (item: StockItem) => Promise<void>;
   importStockItems: (input: ImportStockInput) => Promise<void>;
   updateProjectStockItem: (input: UpdateProjectStockItemInput) => Promise<void>;
+  deleteProjectStockItem: (input: DeleteProjectStockItemInput) => Promise<void>;
   deleteReceivingRequest: (requestId: string) => Promise<void>;
   receivePrPoPayload: (payload: PrPoReceivePayload) => Promise<PrPoReceiveResponse>;
   activeProjectNo: string;
@@ -1368,7 +1374,19 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         throw new Error('ไม่พบรายการ EQM ของโครงการผู้ให้ยืม กรุณารีเฟรชแล้วลองใหม่');
       }
       const isBorrowableProjectItem = matchesProjectBorrowItemType(sourceItem);
-      if (!isBorrowableProjectItem || !isStockItemAvailableForMovement(sourceItem) || line.qty > sourceItem.qty) {
+      const reservedQty = projectBorrowList
+        .filter((request) => request.status === 'Pending Approval' || request.status === 'Pending Dispatch')
+        .reduce((sum, request) => sum + request.items
+          .filter((item) => (
+            projectNoMatches(request.lenderProjectNo, lenderProject.projectNo) &&
+            (normalizeText(item.sourceStockItemId) === getStockItemId(sourceItem) || normalizeText(item.receiveNo) === normalizeText(sourceItem.receiveNo))
+          ))
+          .reduce((itemSum, item) => itemSum + item.qty, 0), 0);
+      const availableQty = Math.max(0, sourceItem.qty - reservedQty);
+      if (!isBorrowableProjectItem || !isStockItemAvailableForMovement(sourceItem) || line.qty > availableQty) {
+        if (isBorrowableProjectItem && isStockItemAvailableForMovement(sourceItem)) {
+          throw new Error(`รายการ ${sourceItem.itemNo || sourceItem.receiveNo} พร้อมให้ยืมเหลือ ${availableQty.toLocaleString()} ชิ้น หลังหักจำนวนที่ถูกจองแล้ว`);
+        }
         throw new Error(`รายการ ${sourceItem.itemNo || sourceItem.receiveNo} ไม่ใช่ EQM/นั่งร้าน/แบบเหล็กที่พร้อมให้ยืม หรือจำนวนไม่พอ`);
       }
       return { sourceItem, qty: line.qty };
@@ -1416,7 +1434,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       totalQty: request.totalQty,
       itemCount: request.items.length,
     });
-  }, [items, projectList, userProfile]);
+  }, [items, projectBorrowList, projectList, userProfile]);
 
   const getProjectBorrowApprover = useCallback((request: ProjectBorrowRequest) => {
     if (!userProfile) return false;
@@ -3498,6 +3516,81 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     });
   }, [items, userProfile]);
 
+  const deleteProjectStockItem = useCallback(async ({
+    projectNo,
+    stockItemIds,
+  }: DeleteProjectStockItemInput) => {
+    if (!userProfile?.role.includes('MasterAdmin')) {
+      throw new Error('Only MasterAdmin can delete stock items.');
+    }
+
+    const normalizedProjectNo = normalizeProjectNoText(projectNo);
+    const requestedStockItemIds = [...new Set(stockItemIds.map((id) => normalizeText(id)).filter(Boolean))];
+
+    if (!normalizedProjectNo || !requestedStockItemIds.length) {
+      throw new Error('Project and stock item identifiers are required.');
+    }
+
+    const targetItems = items.filter((item) => (
+      requestedStockItemIds.includes(getStockItemId(item)) &&
+      projectNoMatches(getStockItemProjectNo(item), normalizedProjectNo)
+    ));
+
+    if (!targetItems.length) {
+      throw new Error('Stock item was not found. Please refresh and try again.');
+    }
+
+    const stockRefs = targetItems.map((item) => (
+      doc(db, APP_NAME, 'root', 'stockItems', getStockItemId(item))
+    ));
+    const deleteHistoryCollection = collection(db, APP_NAME, 'root', 'deleteitemhistory');
+    const deletedAt = new Date().toISOString();
+    const deletedBy = createReceivedBySnapshot(userProfile, 'MasterAdmin');
+    const historyRefs = targetItems.map(() => doc(deleteHistoryCollection));
+
+    await runTransaction(db, async (transaction) => {
+      const stockSnapshots = await Promise.all(stockRefs.map((stockRef) => transaction.get(stockRef)));
+
+      stockSnapshots.forEach((snapshot, index) => {
+        if (!snapshot.exists()) {
+          throw new Error('Stock item was not found. Please refresh and try again.');
+        }
+
+        const currentItem = normalizeStockItem(snapshot.data(), snapshot.id);
+        if (!projectNoMatches(getStockItemProjectNo(currentItem), normalizedProjectNo)) {
+          throw new Error('Stock item is not in the selected project.');
+        }
+
+        const originalData = snapshot.data();
+        transaction.set(historyRefs[index], stripUndefined({
+          ...originalData,
+          id: historyRefs[index].id,
+          historyId: historyRefs[index].id,
+          action: 'delete_project_stock_item',
+          originalStockItemId: snapshot.id,
+          deletedProjectNo: normalizedProjectNo,
+          sourcePath: `${APP_NAME}/root/stockItems/${snapshot.id}`,
+          deletedAt,
+          deletedByUid: deletedBy.receivedByUid,
+          deletedByName: deletedBy.receivedByName,
+          deletedByEmail: deletedBy.receivedByEmail,
+          recoverable: true,
+          originalData,
+        }));
+        transaction.delete(stockRefs[index]);
+      });
+    });
+
+    await logInventoryActivity('DELETE_ITEM', userProfile, {
+      entityType: 'projectStock',
+      projectNo: normalizedProjectNo,
+      stockItemIds: targetItems.map((item) => getStockItemId(item)),
+      itemNo: targetItems[0]?.itemNo,
+      itemDescription: targetItems[0]?.itemDescription,
+      itemCount: targetItems.length,
+    });
+  }, [items, userProfile]);
+
   const deleteReceivingRequest = useCallback(async (requestId: string) => {
     if (!userProfile?.role.includes('MasterAdmin')) {
       throw new Error('เฉพาะ MasterAdmin เท่านั้นที่สามารถลบรายการรับเข้าได้');
@@ -3704,6 +3797,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       receiveNewItem,
       importStockItems,
       updateProjectStockItem,
+      deleteProjectStockItem,
       deleteReceivingRequest,
       receivePrPoPayload,
       activeProjectNo,
@@ -3727,6 +3821,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       receiveNewItem,
       importStockItems,
       updateProjectStockItem,
+      deleteProjectStockItem,
       deleteReceivingRequest,
       receivePrPoPayload,
       rejectProjectBorrowRequest,

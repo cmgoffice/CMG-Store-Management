@@ -155,12 +155,30 @@ function formatBangkokDateTime(value: string) {
 
 export function StockListPage() {
   const { projects, stockItems, receivingRequests } = useInventory();
-  const [query, setQuery] = useState('');
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [query, setQuery] = useState(searchParams.get('search') ?? '');
   const selectedItemType = getItemTypeOption(searchParams.get('itemType') ?? '')?.code ?? '';
   const [expandedItemIds, setExpandedItemIds] = useState<string[]>([]);
   const [pageSize, setPageSize] = useState<(typeof PAGE_SIZE_OPTIONS)[number]>(100);
   const [currentPage, setCurrentPage] = useState(1);
+
+  const handleQueryChange = (value: string) => {
+    setQuery(value);
+    const nextSearchParams = new URLSearchParams(searchParams);
+
+    if (value.trim()) {
+      nextSearchParams.set('search', value);
+    } else {
+      nextSearchParams.delete('search');
+    }
+
+    setSearchParams(nextSearchParams, { replace: true });
+  };
+
+  useEffect(() => {
+    const nextQuery = searchParams.get('search') ?? '';
+    setQuery((currentQuery) => (currentQuery === nextQuery ? currentQuery : nextQuery));
+  }, [searchParams]);
   const categoryFilteredStockItems = useMemo(
     () => stockItems.filter((item) => matchesItemType(item, selectedItemType)),
     [selectedItemType, stockItems]
@@ -373,9 +391,18 @@ export function StockListPage() {
           vendorName,
           representative.itemDescription,
           representative.itemNo,
+          representative.materialNo,
+          representative.iditem,
           ...projectQty.flatMap((entry) => [entry.projectNo, entry.projectName, String(entry.qty)]),
           ...history.flatMap((entry) => [entry.prNo, entry.receivedByName, entry.receiveDate]),
-          ...group.items.flatMap((item) => [item.receiveNo, item.prNo, item.poNo]),
+          ...group.items.flatMap((item) => [
+            item.receiveNo,
+            item.prNo,
+            item.poNo,
+            item.itemNo,
+            item.materialNo,
+            item.iditem,
+          ]),
         ]
           .join(' ')
           .toLowerCase();
@@ -444,7 +471,7 @@ export function StockListPage() {
         title="สินค้าคงคลัง"
         description="ภาพรวมสินค้าคงคลังทุกโครงการ พร้อมแสดงจำนวนแยกตามโครงการ"
         actions={
-          <SearchField value={query} onChange={setQuery} placeholder="ค้นหาสินค้าคงคลัง" />
+          <SearchField value={query} onChange={handleQueryChange} placeholder="ค้นหาสินค้าคงคลัง" />
         }
       />
 
