@@ -19,7 +19,7 @@ import {
 } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { APP_NAME } from '../config/firestore';
-import { db, masterDataDb, masterDataProjectsPath, storage } from '../firebase';
+import { db, masterDataDb, masterDataProjectsPath, storage, maintShopDb } from '../firebase';
 import { processPrPoReceivePayload } from '../services/prPoReceiveIntegration';
 import { matchesProjectBorrowItemType } from '../constants/itemTypes';
 import type {
@@ -1208,6 +1208,91 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     () => visibleProjects.filter((project) => normalizeProjectStatus(project.status) === 'Active'),
     [visibleProjects]
   );
+
+  useEffect(() => {
+    if (!maintShopDb) return;
+    const syncJobSites = async () => {
+      try {
+        const uniqueSites = Array.from(new Set(activeVisibleProjects.map(p => {
+          const text = p.projectNo.trim();
+          const match = text.match(/\bJ[-\s]?0*([0-9]+[a-z0-9]*)\b/i) || text.match(/\b0*([0-9]+[a-z0-9]*)\b/i);
+          return match ? `J${match[1].toUpperCase()}` : text;
+        })));
+        if (uniqueSites.length > 0) {
+          await setDoc(doc(maintShopDb, 'cmg-maint-shop', 'root', 'config', 'activeJobSites'), {
+            sites: uniqueSites
+          });
+        }
+      } catch (error) {
+        console.error('Failed to sync job sites to maintShopDb', error);
+      }
+    };
+    syncJobSites();
+  }, [activeVisibleProjects]);
+
+  useEffect(() => {
+    if (!maintShopDb || items.length === 0) return;
+    const syncKey = `synced_maint_tools_all_fixed`;
+    if (localStorage.getItem(syncKey)) return;
+
+    const syncExistingTools = async () => {
+      try {
+        const projectItems = items.filter(item => 
+          ['ML', 'EQM', 'SP-CS', 'SHE'].includes(item.itemType || '')
+        );
+
+        if (projectItems.length === 0) return;
+
+        const uniqueItems = new Map();
+        for (const item of projectItems) {
+           const partCode = item.materialNo || item.itemNo;
+           if (!partCode) continue;
+           
+           const rawLoc = item.purchasedForProject || item.location || '001';
+           const text = rawLoc.trim();
+           const match = text.match(/\bJ[-\s]?0*([0-9]+[a-z0-9]*)\b/i) || text.match(/\b0*([0-9]+[a-z0-9]*)\b/i);
+           const formattedLoc = match ? `J${match[1].toUpperCase()}` : (text || 'J02B');
+           
+           const key = `${formattedLoc}_${partCode}`;
+           if (!uniqueItems.has(key)) {
+              uniqueItems.set(key, { ...item, accumulatedQty: item.qty || 0, formattedLoc });
+           } else {
+              uniqueItems.get(key).accumulatedQty += (item.qty || 0);
+           }
+        }
+
+        const promises = [];
+        for (const [key, item] of uniqueItems.entries()) {
+            const newDocRef = doc(collection(maintShopDb, 'cmg-maint-shop', 'root', 'handtools'));
+            promises.push(setDoc(newDocRef, {
+              code: item.materialNo || item.itemNo,
+              name: item.itemDescription || '',
+              model: '',
+              brand: '',
+              quantity: item.accumulatedQty,
+              type: item.itemType || 'Other',
+              status: 'Active',
+              currentMeter: 0,
+              location: item.formattedLoc,
+              criticalLevel: 'Normal',
+              pmIntervalHr: 0,
+              pmIntervalDay: 0,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp()
+            }));
+        }
+        
+        await Promise.all(promises);
+        localStorage.setItem(syncKey, 'true');
+        console.log("Auto-synced all ML/EQM items to Handtools!");
+      } catch (err) {
+        console.error("Failed to sync existing tools:", err);
+      }
+    };
+    
+    syncExistingTools();
+  }, [items]);
+
 
   const visibleStockItems = useMemo(() => {
     if (!userProfile) {

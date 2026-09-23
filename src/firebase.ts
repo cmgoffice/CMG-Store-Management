@@ -48,3 +48,30 @@ export const masterDataDb = masterDataApp
 
 export const masterDataProjectsPath =
   import.meta.env.VITE_MASTERDATA_PROJECTS_PATH?.trim() ?? '';
+
+const maintShopConfig: FirebaseOptions = {
+  apiKey: import.meta.env.VITE_MAINTSHOP_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_MAINTSHOP_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_MAINTSHOP_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_MAINTSHOP_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_MAINTSHOP_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_MAINTSHOP_FIREBASE_APP_ID,
+};
+
+const hasMaintShopConfig = [
+  maintShopConfig.apiKey,
+  maintShopConfig.authDomain,
+  maintShopConfig.projectId,
+  maintShopConfig.storageBucket,
+  maintShopConfig.messagingSenderId,
+  maintShopConfig.appId,
+].every((value) => typeof value === 'string' && value.trim().length > 0);
+
+const maintShopApp = hasMaintShopConfig
+  ? getApps().find((firebaseApp) => firebaseApp.name === 'maint-shop') ??
+    initializeApp(maintShopConfig, 'maint-shop')
+  : null;
+
+export const maintShopDb = maintShopApp
+  ? getFirestore(maintShopApp)
+  : null;
