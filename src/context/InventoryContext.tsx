@@ -16,6 +16,8 @@ import {
   setDoc,
   onSnapshot,
   serverTimestamp,
+  getDocs,
+  deleteDoc
 } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { APP_NAME } from '../config/firestore';
@@ -1232,7 +1234,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
 
   useEffect(() => {
     if (!maintShopDb || items.length === 0) return;
-    const syncKey = `synced_maint_tools_all_fixed`;
+    const syncKey = `synced_maint_tools_all_fixed_v2`;
     if (localStorage.getItem(syncKey)) return;
 
     const syncExistingTools = async () => {
@@ -1243,12 +1245,17 @@ export function InventoryProvider({ children }: PropsWithChildren) {
 
         if (projectItems.length === 0) return;
 
+        // Clear existing wrong data first
+        const snapshot = await getDocs(collection(maintShopDb, 'cmg-maint-shop', 'root', 'handtools'));
+        const deletePromises = snapshot.docs.map(d => deleteDoc(d.ref));
+        await Promise.all(deletePromises);
+
         const uniqueItems = new Map();
         for (const item of projectItems) {
            const partCode = item.materialNo || item.itemNo;
            if (!partCode) continue;
            
-           const rawLoc = item.purchasedForProject || item.location || '001';
+           const rawLoc = normalizeCmgProjectCode(item.cmgProjectCode, item.purchasedForProject, item.location, item.projectId) || '001';
            const text = rawLoc.trim();
            const match = text.match(/\bJ[-\s]?0*([0-9]+[a-z0-9]*)\b/i) || text.match(/\b0*([0-9]+[a-z0-9]*)\b/i);
            const formattedLoc = match ? `J${match[1].toUpperCase()}` : (text || 'J02B');
