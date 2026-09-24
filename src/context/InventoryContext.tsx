@@ -1232,73 +1232,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     syncJobSites();
   }, [activeVisibleProjects]);
 
-  useEffect(() => {
-    if (!maintShopDb || items.length === 0) return;
-    const syncKey = `synced_maint_tools_all_fixed_v2`;
-    if (localStorage.getItem(syncKey)) return;
 
-    const syncExistingTools = async () => {
-      try {
-        const projectItems = items.filter(item => 
-          ['ML', 'EQM', 'SP-CS', 'SHE'].includes(item.itemType || '')
-        );
-
-        if (projectItems.length === 0) return;
-
-        // Clear existing wrong data first
-        const snapshot = await getDocs(collection(maintShopDb, 'cmg-maint-shop', 'root', 'handtools'));
-        const deletePromises = snapshot.docs.map(d => deleteDoc(d.ref));
-        await Promise.all(deletePromises);
-
-        const uniqueItems = new Map();
-        for (const item of projectItems) {
-           const partCode = item.materialNo || item.itemNo;
-           if (!partCode) continue;
-           
-           const rawLoc = normalizeCmgProjectCode(item.cmgProjectCode, item.purchasedForProject, item.location, item.projectId) || '001';
-           const text = rawLoc.trim();
-           const match = text.match(/\bJ[-\s]?0*([0-9]+[a-z0-9]*)\b/i) || text.match(/\b0*([0-9]+[a-z0-9]*)\b/i);
-           const formattedLoc = match ? `J${match[1].toUpperCase()}` : (text || 'J02B');
-           
-           const key = `${formattedLoc}_${partCode}`;
-           if (!uniqueItems.has(key)) {
-              uniqueItems.set(key, { ...item, accumulatedQty: item.qty || 0, formattedLoc });
-           } else {
-              uniqueItems.get(key).accumulatedQty += (item.qty || 0);
-           }
-        }
-
-        const promises = [];
-        for (const [key, item] of uniqueItems.entries()) {
-            const newDocRef = doc(collection(maintShopDb, 'cmg-maint-shop', 'root', 'handtools'));
-            promises.push(setDoc(newDocRef, {
-              code: item.materialNo || item.itemNo,
-              name: item.itemDescription || '',
-              model: '',
-              brand: '',
-              quantity: item.accumulatedQty,
-              type: item.itemType || 'Other',
-              status: 'Active',
-              currentMeter: 0,
-              location: item.formattedLoc,
-              criticalLevel: 'Normal',
-              pmIntervalHr: 0,
-              pmIntervalDay: 0,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp()
-            }));
-        }
-        
-        await Promise.all(promises);
-        localStorage.setItem(syncKey, 'true');
-        console.log("Auto-synced all ML/EQM items to Handtools!");
-      } catch (err) {
-        console.error("Failed to sync existing tools:", err);
-      }
-    };
-    
-    syncExistingTools();
-  }, [items]);
 
 
   const visibleStockItems = useMemo(() => {

@@ -518,6 +518,19 @@ export function ReceivingPage() {
       );
       
       if (syncedDetails) {
+        if (maintShopDb) {
+          try {
+             const notifRef = doc(collection(maintShopDb, 'cmg-maint-shop', 'root', 'notifications'));
+             await setDoc(notifRef, {
+               title: 'รับเข้าเครื่องมือใหม่ (PR/PO)',
+               message: syncedDetails,
+               createdAt: serverTimestamp(),
+               read: false
+             });
+          } catch (e) {
+             console.error("Failed to push notification", e);
+          }
+        }
         window.alert(`✅ อัปเดตข้อมูลไปยังระบบซ่อมบำรุงเรียบร้อยแล้ว!\n\nรายการที่ถูกเพิ่ม:\n${syncedDetails}`);
       }
 
@@ -650,6 +663,19 @@ export function ReceivingPage() {
       // -----------------------------------------------------
 
       if (syncedDetails) {
+        if (maintShopDb) {
+          try {
+             const notifRef = doc(collection(maintShopDb, 'cmg-maint-shop', 'root', 'notifications'));
+             await setDoc(notifRef, {
+               title: 'ย้ายเครื่องมือเข้าโครงการ',
+               message: syncedDetails,
+               createdAt: serverTimestamp(),
+               read: false
+             });
+          } catch (e) {
+             console.error("Failed to push notification", e);
+          }
+        }
         window.alert(`✅ รับเข้าเครื่องมือไปยังระบบซ่อมบำรุงสำเร็จ!\n\nรายการที่ถูกย้ายไป:\n${syncedDetails}`);
       }
 
