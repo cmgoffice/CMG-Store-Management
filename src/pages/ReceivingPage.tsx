@@ -457,9 +457,13 @@ export function ReceivingPage() {
     setRequestReceiveError('');
     setApprovingRequestId(receivingRequest.id);
     try {
+      let syncedDetails = "";
       if (maintShopDb) {
         for (const rItem of receivedItems) {
           if (rItem.receivedQty <= 0) continue;
+          
+          const type = rItem.itemType;
+          if (!['ML', 'EQM', 'SP-CS', 'SHE'].includes(type)) continue;
           
           const originalItem = receivingRequest.items[rItem.itemIndex];
           const partCode = originalItem.materialNo || originalItem.itemNo;
@@ -468,6 +472,11 @@ export function ReceivingPage() {
           const q = query(collection(maintShopDb, 'cmg-maint-shop', 'root', 'handtools'), where('code', '==', partCode));
           const querySnapshot = await getDocs(q);
           
+          let loc = receivingRequest.projectNo || '';
+          const text = loc.trim();
+          const match = text.match(/\bJ[-\s]?0*([0-9]+[a-z0-9]*)\b/i) || text.match(/\b0*([0-9]+[a-z0-9]*)\b/i);
+          loc = match ? `J${match[1].toUpperCase()}` : (text || 'J02B');
+
           if (!querySnapshot.empty) {
             const docRef = querySnapshot.docs[0].ref;
             await setDoc(docRef, {
@@ -477,19 +486,13 @@ export function ReceivingPage() {
           } else {
             const newDocRef = doc(collection(maintShopDb, 'cmg-maint-shop', 'root', 'handtools'));
             
-            // Format project No as Job Site (e.g. J74)
-            let loc = receivingRequest.projectNo || '';
-            const text = loc.trim();
-            const match = text.match(/\bJ[-\s]?0*([0-9]+[a-z0-9]*)\b/i) || text.match(/\b0*([0-9]+[a-z0-9]*)\b/i);
-            loc = match ? `J${match[1].toUpperCase()}` : (text || 'J02B');
-
             await setDoc(newDocRef, {
               code: partCode,
               name: originalItem.itemDescription,
               model: '',
               brand: '',
               quantity: rItem.receivedQty,
-              type: 'Other',
+              type: type || 'Other',
               status: 'Active',
               currentMeter: 0,
               location: loc,
@@ -500,6 +503,7 @@ export function ReceivingPage() {
               updatedAt: serverTimestamp()
             });
           }
+          syncedDetails += `- ${originalItem.itemDescription} (${rItem.receivedQty} ชิ้น) -> ${loc}\n`;
         }
       }
 
@@ -512,6 +516,11 @@ export function ReceivingPage() {
           itemTypeGroup,
         }))
       );
+      
+      if (syncedDetails) {
+        window.alert(`✅ อัปเดตข้อมูลไปยังระบบซ่อมบำรุงเรียบร้อยแล้ว!\n\nรายการที่ถูกเพิ่ม:\n${syncedDetails}`);
+      }
+
       setReceivingRequest(null);
       setRequestReceiveQtyDraft({});
       setRequestItemTypeDraft({});
@@ -598,6 +607,7 @@ export function ReceivingPage() {
       );
 
       // --- DUAL-WRITE TO MAINT SHOP FOR DISPATCH RECEIVE ---
+      let syncedDetails = "";
       if (maintShopDb) {
         try {
           const destProject = receivingIncomingDispatch.destinationProjectNo || '';
@@ -630,6 +640,7 @@ export function ReceivingPage() {
                  createdAt: serverTimestamp(),
                  updatedAt: serverTimestamp()
                });
+               syncedDetails += `- ${item.itemDescription} (${received.receivedQty} ชิ้น) -> ${formattedLoc}\n`;
              }
           }
         } catch (err) {
@@ -637,6 +648,10 @@ export function ReceivingPage() {
         }
       }
       // -----------------------------------------------------
+
+      if (syncedDetails) {
+        window.alert(`✅ รับเข้าเครื่องมือไปยังระบบซ่อมบำรุงสำเร็จ!\n\nรายการที่ถูกย้ายไป:\n${syncedDetails}`);
+      }
 
       setIncomingReceiveError('');
       setReceivingIncomingDispatch(null);
