@@ -3,9 +3,10 @@ import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { PageHeader } from '../components/PageHeader';
 import { SearchField } from '../components/SearchField';
+import { StatusBadge } from '../components/StatusBadge';
 import { getItemTypeOption, matchesItemType } from '../constants/itemTypes';
 import { useInventory } from '../context/InventoryContext';
-import type { StockItem } from '../types/models';
+import type { StockItem, StockStatus } from '../types/models';
 import '../styles/tables.css';
 import styles from './StockListPage.module.css';
 
@@ -35,8 +36,11 @@ type AggregatedInventoryItem = {
   itemDescription: string;
   itemNo: string;
   qty: number;
+  availableQty: number;
+  repairQty: number;
   amount: number;
   availability: InventoryAvailability;
+  statuses: StockStatus[];
   searchText: string;
   projectQty: InventoryProjectQty[];
   qtyByProject: Record<string, number>;
@@ -45,6 +49,14 @@ type AggregatedInventoryItem = {
 
 const UNASSIGNED_PROJECT_NO = 'Unassigned';
 const PAGE_SIZE_OPTIONS = [100, 200, 500] as const;
+
+interface StockListPageProps {
+  items?: StockItem[];
+  title?: string;
+  description?: string;
+  emptyMessage?: string;
+  showItemStatus?: boolean;
+}
 
 function normalizeLookupKey(value: unknown) {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
@@ -153,8 +165,15 @@ function formatBangkokDateTime(value: string) {
     .replace(',', '');
 }
 
-export function StockListPage() {
-  const { projects, stockItems, receivingRequests } = useInventory();
+export function StockListPage({
+  items: providedItems,
+  title = 'สินค้าคงคลัง',
+  description = 'ภาพรวมสินค้าคงคลังทุกโครงการ พร้อมแสดงจำนวนแยกตามโครงการ',
+  emptyMessage = 'ไม่พบสินค้าคงคลังตามเงื่อนไขที่ค้นหา',
+  showItemStatus = false,
+}: StockListPageProps = {}) {
+  const { projects, stockItems, receivingRequests, repairShopItems } = useInventory();
+  const items = providedItems ?? stockItems;
   const [searchParams, setSearchParams] = useSearchParams();
   const [query, setQuery] = useState(searchParams.get('search') ?? '');
   const selectedItemType = getItemTypeOption(searchParams.get('itemType') ?? '')?.code ?? '';
@@ -180,8 +199,8 @@ export function StockListPage() {
     setQuery((currentQuery) => (currentQuery === nextQuery ? currentQuery : nextQuery));
   }, [searchParams]);
   const categoryFilteredStockItems = useMemo(
-    () => stockItems.filter((item) => matchesItemType(item, selectedItemType)),
-    [selectedItemType, stockItems]
+    () => items.filter((item) => matchesItemType(item, selectedItemType)),
+    [items, selectedItemType]
   );
   const projectByNo = useMemo(() => {
     return new Map(projects.map((project) => [normalizeProjectNo(project.projectNo), project]));
@@ -331,7 +350,22 @@ export function StockListPage() {
         }, {});
         const purchasedForProject =
           projectQty.map((entry) => entry.projectNo).join(', ') || '-';
+        const repairItems = repairShopItems.filter((repairItem) =>
+          repairItem.itemNo.trim().toLowerCase() === representative.itemNo.trim().toLowerCase() &&
+          repairItem.itemDescription.trim().toLowerCase() === representative.itemDescription.trim().toLowerCase()
+        );
+        const stockAvailableQty = group.items
+          .filter((stockItem) => stockItem.status !== 'Repair' && stockItem.status !== 'Pending Repair')
+          .reduce((total, stockItem) => total + stockItem.qty, 0);
+        const underRepairQty = repairItems
+          .filter((repairItem) => repairItem.status === 'Repair' || repairItem.status === 'Pending Repair')
+          .reduce((total, repairItem) => total + repairItem.qty, 0);
+        const availableQty = Math.max(0, stockAvailableQty - underRepairQty);
+        const repairQty = repairItems
+          .filter((repairItem) => repairItem.status === 'Repair')
+          .reduce((total, repairItem) => total + repairItem.qty, 0);
         const availability: InventoryAvailability = group.qty > 0 ? 'Available' : 'Unavailable';
+        const statuses = [...new Set(group.items.map((item) => item.status))];
         const history = [...group.items]
           .map((item) => {
             const requestKeys = [
@@ -391,6 +425,7 @@ export function StockListPage() {
           vendorName,
           representative.itemDescription,
           representative.itemNo,
+          ...statuses,
           representative.materialNo,
           representative.iditem,
           ...projectQty.flatMap((entry) => [entry.projectNo, entry.projectName, String(entry.qty)]),
@@ -416,8 +451,11 @@ export function StockListPage() {
           itemDescription: representative.itemDescription,
           itemNo: representative.itemNo,
           qty: group.qty,
+          availableQty,
+          repairQty,
           amount: group.amount,
           availability,
+          statuses,
           searchText,
           projectQty,
           qtyByProject,
@@ -430,7 +468,7 @@ export function StockListPage() {
         const rightSortValue = right.history[0]?.sortValue ?? 0;
         return rightSortValue - leftSortValue;
       });
-  }, [categoryFilteredStockItems, projectByNo, projectOrder, query, receivingRequests]);
+  }, [categoryFilteredStockItems, projectByNo, projectOrder, query, receivingRequests, repairShopItems]);
 
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
   const safeCurrentPage = Math.min(currentPage, totalPages);
@@ -468,8 +506,8 @@ export function StockListPage() {
     <div>
       <PageHeader
         eyebrow="คลังสินค้า"
-        title="สินค้าคงคลัง"
-        description="ภาพรวมสินค้าคงคลังทุกโครงการ พร้อมแสดงจำนวนแยกตามโครงการ"
+        title={title}
+        description={description}
         actions={
           <SearchField value={query} onChange={handleQueryChange} placeholder="ค้นหาสินค้าคงคลัง" />
         }
@@ -490,7 +528,9 @@ export function StockListPage() {
                   {project.projectNo}
                 </th>
               ))}
-              <th className={`${styles.totalQtyColumn} numeric`}>จำนวนรวม</th><th className={styles.statusColumn}>สถานะ</th><th className={`${styles.amountColumn} numeric`}>มูลค่า</th>
+              <th className={`${styles.totalQtyColumn} numeric`}>จำนวนรวม</th>
+              {showItemStatus ? <th className={styles.statusColumn}>สถานะ</th> : <><th className={`${styles.availableColumn} numeric`}>Available</th><th className={`${styles.repairColumn} numeric`}>Repair</th></>}
+              <th className={`${styles.amountColumn} numeric`}>มูลค่า</th>
             </tr>
           </thead>
           <tbody>
@@ -535,22 +575,16 @@ export function StockListPage() {
                     <td className={`${styles.totalQtyCell} numeric ${item.qty === 0 ? 'muted' : ''}`}>
                       {item.qty === 0 ? '-' : item.qty.toLocaleString()}
                     </td>
-                    <td className={styles.statusCell}>
-                      <span
-                        className={`${styles.availabilityBadge} ${
-                          item.availability === 'Available'
-                            ? styles.available
-                            : styles.unavailable
-                        }`}
-                      >
-                        {item.availability}
-                      </span>
-                    </td>
+                    {showItemStatus ? <td className={styles.statusCell}>
+                        <div className={styles.statusBadges}>
+                          {item.statuses.map((status) => <StatusBadge key={status} status={status} />)}
+                        </div>
+                    </td> : <><td className={`${styles.availableCell} numeric`}>{item.availableQty > 0 ? item.availableQty.toLocaleString() : ''}</td><td className={`${styles.repairCell} numeric`}>{item.repairQty > 0 ? item.repairQty.toLocaleString() : ''}</td></>}
                     <td className={`${styles.amountCell} numeric`}>{item.amount.toLocaleString()}</td>
                   </tr>
                   {isExpanded ? (
                     <tr className={styles.detailRow}>
-                      <td colSpan={5 + projectQtyColumns.length}>
+                      <td colSpan={(showItemStatus ? 5 : 6) + projectQtyColumns.length}>
                         <div className={styles.detailPanel}>
                           <table className={styles.detailTable}>
                             <thead>
@@ -584,10 +618,10 @@ export function StockListPage() {
             {filteredItems.length === 0 && (
               <tr>
                 <td
-                  colSpan={5 + projectQtyColumns.length}
+                  colSpan={(showItemStatus ? 5 : 6) + projectQtyColumns.length}
                   className="text-center py-6 text-slate-400 font-semibold text-sm"
                 >
-                  ไม่พบสินค้าคงคลังตามเงื่อนไขที่ค้นหา
+                  {emptyMessage}
                 </td>
               </tr>
             )}

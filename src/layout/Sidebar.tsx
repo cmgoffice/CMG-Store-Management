@@ -18,6 +18,7 @@ import {
   ArrowLeftRight,
   ClipboardX,
   History,
+  Wrench,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
@@ -53,7 +54,10 @@ const groups = [
   {
     label: 'สินค้าคงคลัง',
     icon: PackageCheck,
-    items: [{ to: '/store/stock', label: 'สินค้าคงคลัง', icon: PackageCheck }],
+    items: [
+      { to: '/store/stock', label: 'สินค้าคงคลัง', icon: PackageCheck },
+      { to: '/store/repairshop', label: 'Repair Shop', icon: Wrench },
+    ],
   },
   {
     label: 'คลังสินค้า',
@@ -135,6 +139,9 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse, pendin
             return canManageProjects;
           }
           if (item.to === '/store/stock') {
+            return hasAnyRole(['MasterAdmin', 'Store Center']);
+          }
+          if (item.to === '/store/repairshop') {
             return hasAnyRole(['MasterAdmin', 'Store Center']);
           }
           if (item.to === '/store/dispatch') {

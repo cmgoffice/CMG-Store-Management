@@ -3,8 +3,6 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import { ITEM_TYPE_OPTIONS } from '../constants/itemTypes';
 import { SearchField } from '../components/SearchField';
 import { StatusBadge } from '../components/StatusBadge';
-import { maintShopDb } from '../firebase';
-import { collection, query, where, getDocs, doc, setDoc, serverTimestamp, increment } from 'firebase/firestore';
 import { useInventory } from '../context/InventoryContext';
 import { useRole } from '../context/RoleContext';
 import type { DispatchRecord, ReceivingRequest, ReceivingRequestItem, StockItem } from '../types/models';
@@ -457,56 +455,6 @@ export function ReceivingPage() {
     setRequestReceiveError('');
     setApprovingRequestId(receivingRequest.id);
     try {
-      let syncedDetails = "";
-      if (maintShopDb) {
-        for (const rItem of receivedItems) {
-          if (rItem.receivedQty <= 0) continue;
-          
-          const type = rItem.itemType;
-          if (!['ML', 'EQM', 'SP-CS', 'SHE'].includes(type)) continue;
-          
-          const originalItem = receivingRequest.items[rItem.itemIndex];
-          const partCode = originalItem.materialNo || originalItem.itemNo;
-          if (!partCode) continue;
-
-          const q = query(collection(maintShopDb, 'cmg-maint-shop', 'root', 'handtools'), where('code', '==', partCode));
-          const querySnapshot = await getDocs(q);
-          
-          let loc = receivingRequest.projectNo || '';
-          const text = loc.trim();
-          const match = text.match(/\bJ[-\s]?0*([0-9]+[a-z0-9]*)\b/i) || text.match(/\b0*([0-9]+[a-z0-9]*)\b/i);
-          loc = match ? `J${match[1].toUpperCase()}` : (text || 'J02B');
-
-          if (!querySnapshot.empty) {
-            const docRef = querySnapshot.docs[0].ref;
-            await setDoc(docRef, {
-              quantity: increment(rItem.receivedQty),
-              updatedAt: serverTimestamp()
-            }, { merge: true });
-          } else {
-            const newDocRef = doc(collection(maintShopDb, 'cmg-maint-shop', 'root', 'handtools'));
-            
-            await setDoc(newDocRef, {
-              code: partCode,
-              name: originalItem.itemDescription,
-              model: '',
-              brand: '',
-              quantity: rItem.receivedQty,
-              type: type || 'Other',
-              status: 'Active',
-              currentMeter: 0,
-              location: loc,
-              criticalLevel: 'Normal',
-              pmIntervalHr: 0,
-              pmIntervalDay: 0,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp()
-            });
-          }
-          syncedDetails += `- ${originalItem.itemDescription} (${rItem.receivedQty} ชิ้น) -> ${loc}\n`;
-        }
-      }
-
       await approveReceivingRequest(
         receivingRequest.id,
         receivedItems.map(({ itemIndex, receivedQty, itemType, itemTypeGroup }) => ({
@@ -516,23 +464,6 @@ export function ReceivingPage() {
           itemTypeGroup,
         }))
       );
-      
-      if (syncedDetails) {
-        if (maintShopDb) {
-          try {
-             const notifRef = doc(collection(maintShopDb, 'cmg-maint-shop', 'root', 'notifications'));
-             await setDoc(notifRef, {
-               title: 'รับเข้าเครื่องมือใหม่ (PR/PO)',
-               message: syncedDetails,
-               createdAt: serverTimestamp(),
-               read: false
-             });
-          } catch (e) {
-             console.error("Failed to push notification", e);
-          }
-        }
-        window.alert(`✅ อัปเดตข้อมูลไปยังระบบซ่อมบำรุงเรียบร้อยแล้ว!\n\nรายการที่ถูกเพิ่ม:\n${syncedDetails}`);
-      }
 
       setReceivingRequest(null);
       setRequestReceiveQtyDraft({});
@@ -618,66 +549,6 @@ export function ReceivingPage() {
           receivedQty: item.receivedQty,
         }))
       );
-
-      // --- DUAL-WRITE TO MAINT SHOP FOR DISPATCH RECEIVE ---
-      let syncedDetails = "";
-      if (maintShopDb) {
-        try {
-          const destProject = receivingIncomingDispatch.destinationProjectNo || '';
-          const text = destProject.trim();
-          const match = text.match(/\bJ[-\s]?0*([0-9]+[a-z0-9]*)\b/i) || text.match(/\b0*([0-9]+[a-z0-9]*)\b/i);
-          const formattedLoc = match ? `J${match[1].toUpperCase()}` : (text || 'J02B');
-
-          for (const item of receivingIncomingDispatch.items) {
-             const received = receivedItems.find(r => r.stockReceiveNo === item.stockReceiveNo);
-             if (!received || received.receivedQty <= 0) continue;
-
-             const origStockItem = stockItems.find(s => s.stockItemId === item.sourceStockItemId || s.stockItemId === item.stockItemId || s.materialNo === item.materialNo);
-             const type = origStockItem?.itemType || '';
-             
-             if (['ML', 'EQM', 'SP-CS', 'SHE'].includes(type)) {
-               const newDocRef = doc(collection(maintShopDb, 'cmg-maint-shop', 'root', 'handtools'));
-               await setDoc(newDocRef, {
-                 code: item.materialNo || item.itemNo,
-                 name: item.itemDescription || '',
-                 model: '',
-                 brand: '',
-                 quantity: received.receivedQty,
-                 type: type || 'Other',
-                 status: 'Active',
-                 currentMeter: 0,
-                 location: formattedLoc,
-                 criticalLevel: 'Normal',
-                 pmIntervalHr: 0,
-                 pmIntervalDay: 0,
-                 createdAt: serverTimestamp(),
-                 updatedAt: serverTimestamp()
-               });
-               syncedDetails += `- ${item.itemDescription} (${received.receivedQty} ชิ้น) -> ${formattedLoc}\n`;
-             }
-          }
-        } catch (err) {
-          console.error("Failed to sync dispatch receive to maintShopDb", err);
-        }
-      }
-      // -----------------------------------------------------
-
-      if (syncedDetails) {
-        if (maintShopDb) {
-          try {
-             const notifRef = doc(collection(maintShopDb, 'cmg-maint-shop', 'root', 'notifications'));
-             await setDoc(notifRef, {
-               title: 'ย้ายเครื่องมือเข้าโครงการ',
-               message: syncedDetails,
-               createdAt: serverTimestamp(),
-               read: false
-             });
-          } catch (e) {
-             console.error("Failed to push notification", e);
-          }
-        }
-        window.alert(`✅ รับเข้าเครื่องมือไปยังระบบซ่อมบำรุงสำเร็จ!\n\nรายการที่ถูกย้ายไป:\n${syncedDetails}`);
-      }
 
       setIncomingReceiveError('');
       setReceivingIncomingDispatch(null);

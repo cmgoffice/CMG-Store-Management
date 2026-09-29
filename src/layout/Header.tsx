@@ -20,6 +20,7 @@ const menuTitles = [
   { path: '/store/dispatch', title: 'จัดส่งสินค้า' },
   { path: '/store/store', title: 'คลังโครงการ' },
   { path: '/store/stock', title: 'สินค้าคงคลัง' },
+  { path: '/store/repairshop', title: 'Repair Shop' },
   { path: '/receiving', title: 'รับสินค้า' },
   { path: '/cancellations', title: 'ยกเลิกรายการ' },
   { path: '/projects', title: 'รายการโครงการ' },

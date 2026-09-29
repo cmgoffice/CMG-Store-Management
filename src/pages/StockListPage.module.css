@@ -87,6 +87,12 @@
   white-space: nowrap;
 }
 
+.statusBadges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
 .availabilityBadge {
   display: inline-flex;
   align-items: center;
@@ -156,9 +162,32 @@
   width: 82px;
 }
 
+.availableColumn,
+.availableCell,
+.repairColumn,
+.repairCell {
+  width: 40px;
+  min-width: 0;
+  padding-inline: 3px !important;
+  text-align: center !important;
+  border-left: 1px dashed #d8deea;
+  border-right: 1px dashed #d8deea;
+}
+
+.availableColumn {
+  background: #e8f5e9 !important;
+  color: #1b7f3a;
+}
+
+.repairColumn {
+  background: #fdeaea !important;
+  color: #c62828;
+}
+
 .amountColumn,
 .amountCell {
   width: 92px;
+  border-left: 1px dashed #d8deea;
 }
 
 .locationCell {

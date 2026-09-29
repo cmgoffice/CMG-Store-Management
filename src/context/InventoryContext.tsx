@@ -21,7 +21,7 @@ import {
 } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { APP_NAME } from '../config/firestore';
-import { db, masterDataDb, masterDataProjectsPath, storage, maintShopDb } from '../firebase';
+import { db, masterDataDb, masterDataProjectsPath, storage } from '../firebase';
 import { processPrPoReceivePayload } from '../services/prPoReceiveIntegration';
 import { matchesProjectBorrowItemType } from '../constants/itemTypes';
 import type {
@@ -144,6 +144,7 @@ interface InventoryContextValue {
   activeProjects: Project[];
   stockItems: StockItem[];
   allStockItems: StockItem[];
+  repairShopItems: StockItem[];
   receivingRequests: ReceivingRequest[];
   dispatchRecords: DispatchRecord[];
   withdrawRecords: WithdrawRecord[];
@@ -1004,6 +1005,7 @@ function mergeProjects(
 export function InventoryProvider({ children }: PropsWithChildren) {
   const { userProfile } = useAuth();
   const [items, setItems] = useState<StockItem[]>([]);
+  const [repairShopItems, setRepairShopItems] = useState<StockItem[]>([]);
   const [receivingRequestList, setReceivingRequestList] = useState<ReceivingRequest[]>([]);
   const [localProjects, setLocalProjects] = useState<Project[]>([]);
   const [masterProjects, setMasterProjects] = useState<Project[]>([]);
@@ -1024,6 +1026,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     let unsubMasterProjects = () => {};
     let unsubProjectStatuses = () => {};
     let unsubStock = () => {};
+    let unsubRepairShop = () => {};
     let unsubDispatch = () => {};
     let unsubWithdraw = () => {};
     let unsubProjectBorrow = () => {};
@@ -1107,6 +1110,20 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       }
     );
 
+    const repairShopColRef = collection(db, APP_NAME, 'root', 'repairshop');
+    unsubRepairShop = onSnapshot(
+      repairShopColRef,
+      (snapshot) => {
+        const loadedItems = snapshot.docs.map((d) => normalizeStockItem(d.data(), d.id));
+        loadedItems.sort((a, b) => b.receiveNo.localeCompare(a.receiveNo));
+        setRepairShopItems(loadedItems);
+      },
+      (error) => {
+        console.error('Failed to listen to repairshop updates:', error);
+        setRepairShopItems([]);
+      }
+    );
+
     const dispatchColRef = collection(db, APP_NAME, 'root', 'dispatchRecords');
     unsubDispatch = onSnapshot(
       dispatchColRef,
@@ -1182,6 +1199,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       unsubMasterProjects();
       unsubProjectStatuses();
       unsubStock();
+      unsubRepairShop();
       unsubDispatch();
       unsubWithdraw();
       unsubProjectBorrow();
@@ -1211,30 +1229,6 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     [visibleProjects]
   );
 
-  useEffect(() => {
-    if (!maintShopDb) return;
-    const syncJobSites = async () => {
-      try {
-        const uniqueSites = Array.from(new Set(activeVisibleProjects.map(p => {
-          const text = p.projectNo.trim();
-          const match = text.match(/\bJ[-\s]?0*([0-9]+[a-z0-9]*)\b/i) || text.match(/\b0*([0-9]+[a-z0-9]*)\b/i);
-          return match ? `J${match[1].toUpperCase()}` : text;
-        })));
-        if (uniqueSites.length > 0) {
-          await setDoc(doc(maintShopDb, 'cmg-maint-shop', 'root', 'config', 'activeJobSites'), {
-            sites: uniqueSites
-          });
-        }
-      } catch (error) {
-        console.error('Failed to sync job sites to maintShopDb', error);
-      }
-    };
-    syncJobSites();
-  }, [activeVisibleProjects]);
-
-
-
-
   const visibleStockItems = useMemo(() => {
     if (!userProfile) {
       return [];
@@ -1255,6 +1249,27 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       return assigned.some((assignedProjectNo) => projectNoMatches(assignedProjectNo, projectNo));
     });
   }, [items, userProfile]);
+
+  const visibleRepairShopItems = useMemo(() => {
+    if (!userProfile) {
+      return [];
+    }
+
+    if (
+      userProfile.role.includes('MasterAdmin') ||
+      userProfile.role.includes('Store Center')
+    ) {
+      return repairShopItems;
+    }
+
+    const assigned = userProfile.assignedProjects || [];
+    return repairShopItems.filter((item) => {
+      const projectNo = item.status === 'Borrowed' && item.borrowerProjectNo
+        ? normalizeProjectNoText(item.borrowerProjectNo)
+        : getStockItemProjectNo(item);
+      return assigned.some((assignedProjectNo) => projectNoMatches(assignedProjectNo, projectNo));
+    });
+  }, [repairShopItems, userProfile]);
 
   const visibleReceivingRequests = useMemo(() => {
     if (!userProfile) {
@@ -3798,6 +3813,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       activeProjects: activeVisibleProjects,
       stockItems: visibleStockItems,
       allStockItems: items,
+      repairShopItems: visibleRepairShopItems,
       receivingRequests: visibleReceivingRequests,
       dispatchRecords: visibleDispatchRecords,
       withdrawRecords: visibleWithdrawRecords,
@@ -3859,6 +3875,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       visibleDispatchRecords,
       visibleReceivingRequests,
       visibleStockItems,
+      visibleRepairShopItems,
       visibleWithdrawRecords,
       visibleProjects,
       visibleProjectBorrowRequests,

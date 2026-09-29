@@ -16,6 +16,8 @@ export interface Project {
 
 export type StockStatus =
   | 'Available'
+  | 'Pending Repair'
+  | 'Repair'
   | 'Pending Dispatch'
   | 'In Transit'
   | 'Received at Site'

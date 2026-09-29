@@ -5,6 +5,7 @@ import { DispatchPage } from './pages/DispatchPage';
 import { ProjectListPage } from './pages/ProjectListPage';
 import { ReceivingPage } from './pages/ReceivingPage';
 import { StockListPage } from './pages/StockListPage';
+import { RepairShopPage } from './pages/RepairShopPage';
 import { StorePage } from './pages/StorePage';
 import { WithdrawPage } from './pages/WithdrawPage';
 import { LoginPage } from './pages/LoginPage';
@@ -77,6 +78,14 @@ export function App() {
                   element={
                     <ProtectedRoute requireApproved={true} requireRoles={['MasterAdmin']}>
                       <AdminPanel />
+                    </ProtectedRoute>
+                  }
+                />
+                <Route
+                  path="/store/repairshop"
+                  element={
+                    <ProtectedRoute requireApproved={true} requireRoles={['MasterAdmin', 'Store Center']}>
+                      <RepairShopPage />
                     </ProtectedRoute>
                   }
                 />

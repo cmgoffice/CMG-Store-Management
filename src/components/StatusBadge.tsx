@@ -22,18 +22,22 @@ function formatStatusLabel(status: StatusBadgeProps['status']) {
 
 export function StatusBadge({ status }: StatusBadgeProps) {
   const className =
-    status === 'Pending Dispatch' ||
-    status === 'Pending Receipt' ||
-    status === 'Waiting Return' ||
-    status === 'pending'
-      ? styles.pending
-      : status === 'In Transit' || status === 'Borrowed'
-        ? styles.transit
-        : status === 'Overdue'
-          ? styles.overdue
-          : status === 'Issued' || status === 'Withdrawn' || status === 'Cancelled'
-            ? styles.neutral
-            : styles.received;
+    status === 'Pending Repair'
+      ? styles.pendingRepair
+      : status === 'Repair'
+        ? styles.repair
+        : status === 'Pending Dispatch' ||
+          status === 'Pending Receipt' ||
+          status === 'Waiting Return' ||
+          status === 'pending'
+          ? styles.pending
+          : status === 'In Transit' || status === 'Borrowed'
+            ? styles.transit
+            : status === 'Overdue'
+              ? styles.overdue
+              : status === 'Issued' || status === 'Withdrawn' || status === 'Cancelled'
+                ? styles.neutral
+                : styles.received;
 
   return <span className={`${styles.badge} ${className}`}>{formatStatusLabel(status)}</span>;
 }
