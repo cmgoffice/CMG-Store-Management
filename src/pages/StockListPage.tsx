@@ -357,10 +357,7 @@ export function StockListPage({
         const stockAvailableQty = group.items
           .filter((stockItem) => stockItem.status !== 'Repair' && stockItem.status !== 'Pending Repair')
           .reduce((total, stockItem) => total + stockItem.qty, 0);
-        const underRepairQty = repairItems
-          .filter((repairItem) => repairItem.status === 'Repair' || repairItem.status === 'Pending Repair')
-          .reduce((total, repairItem) => total + repairItem.qty, 0);
-        const availableQty = Math.max(0, stockAvailableQty - underRepairQty);
+        const availableQty = Math.max(0, stockAvailableQty);
         const repairQty = repairItems
           .filter((repairItem) => repairItem.status === 'Repair')
           .reduce((total, repairItem) => total + repairItem.qty, 0);
