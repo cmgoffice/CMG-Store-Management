@@ -10,8 +10,6 @@ import type { StockItem, WithdrawRecord } from '../types/models';
 import '../styles/tables.css';
 import styles from './StockListPage.module.css';
 
-type StoreAvailability = 'Available' | 'Unavailable';
-
 type StoreReceiveHistory = {
   id: string;
   receiveDate: string;
@@ -33,8 +31,9 @@ type AggregatedStoreItem = {
   itemDescription: string;
   itemNo: string;
   qty: number;
+  availableQty: number;
+  repairQty: number;
   amount: number;
-  availability: StoreAvailability;
   searchText: string;
   history: StoreReceiveHistory[];
 };
@@ -154,6 +153,7 @@ function formatBangkokDateTime(value: string) {
 export function StorePage() {
   const {
     stockItems,
+    repairShopItems,
     receivingRequests,
     dispatchRecords,
     withdrawRecords,
@@ -170,7 +170,6 @@ export function StorePage() {
   const [pageSize, setPageSize] = useState<(typeof PAGE_SIZE_OPTIONS)[number]>(100);
   const [currentPage, setCurrentPage] = useState(1);
   const [editingItem, setEditingItem] = useState<AggregatedStoreItem | null>(null);
-  const [editItemNo, setEditItemNo] = useState('');
   const [editItemDescription, setEditItemDescription] = useState('');
   const [editError, setEditError] = useState('');
   const [isSavingEdit, setIsSavingEdit] = useState(false);
@@ -283,28 +282,45 @@ export function StorePage() {
             matchesItemType(item, selectedItemType)
         )
       : [];
+    const projectRepairItems = normalizedActiveProjectNo
+      ? repairShopItems.filter((item) => {
+          const status = String(item.status).trim().toLowerCase();
+          return (
+            getStockItemProjectNo(item) === normalizedActiveProjectNo &&
+            status !== 'completed' &&
+            status !== 'repair completed' &&
+            matchesItemType(item, selectedItemType)
+          );
+        })
+      : [];
 
-    const groupedItems = new Map<
-      string,
-      {
-        items: StockItem[];
-        qty: number;
-        amount: number;
-        locations: Set<string>;
-        vendors: Set<string>;
-      }
-    >();
-
-    projectItems.forEach((item) => {
+    type StoreItemGroup = {
+      representative: StockItem;
+      items: StockItem[];
+      repairItems: StockItem[];
+      qty: number;
+      amount: number;
+      locations: Set<string>;
+      vendors: Set<string>;
+    };
+    const groupedItems = new Map<string, StoreItemGroup>();
+    const getOrCreateGroup = (item: StockItem) => {
       const groupKey = `${item.itemNo.trim().toLowerCase()}::${item.itemDescription.trim().toLowerCase()}`;
       const currentGroup = groupedItems.get(groupKey) ?? {
+        representative: item,
         items: [],
+        repairItems: [],
         qty: 0,
         amount: 0,
         locations: new Set<string>(),
         vendors: new Set<string>(),
       };
+      groupedItems.set(groupKey, currentGroup);
+      return currentGroup;
+    };
 
+    projectItems.forEach((item) => {
+      const currentGroup = getOrCreateGroup(item);
       currentGroup.items.push(item);
       currentGroup.qty += item.qty;
       currentGroup.amount += item.amount;
@@ -313,15 +329,26 @@ export function StorePage() {
         currentGroup.vendors.add(item.vendorName.trim());
       }
 
-      groupedItems.set(groupKey, currentGroup);
+    });
+
+    projectRepairItems.forEach((item) => {
+      getOrCreateGroup(item).repairItems.push(item);
     });
 
     return Array.from(groupedItems.values())
       .map((group) => {
-        const representative = group.items[0];
+        const representative = group.representative;
         const location = Array.from(group.locations).filter(Boolean).join(', ') || '-';
         const vendorName = Array.from(group.vendors).join(', ') || '-';
-        const availability: StoreAvailability = group.qty > 0 ? 'Available' : 'Unavailable';
+        const availableQty = Math.max(
+          0,
+          group.items
+            .filter((item) => item.status !== 'Repair' && item.status !== 'Pending Repair')
+            .reduce((total, item) => total + item.qty, 0)
+        );
+        const repairQty = group.repairItems
+          .filter((item) => item.status === 'Repair' || item.status === 'Pending Repair')
+          .reduce((total, item) => total + item.qty, 0);
         const history = [...group.items]
           .map((item) => {
             const requestKeys = [
@@ -417,8 +444,10 @@ export function StorePage() {
           representative.iditem,
           normalizedActiveProjectNo,
           String(group.qty),
+          String(availableQty),
+          String(repairQty),
           ...history.flatMap((entry) => [entry.prNo, entry.form, entry.personName, entry.receiveDate]),
-          ...group.items.flatMap((item) => [
+          ...[...group.items, ...group.repairItems].flatMap((item) => [
             item.receiveNo,
             item.prNo,
             item.poNo,
@@ -438,23 +467,24 @@ export function StorePage() {
           itemDescription: representative.itemDescription,
           itemNo: representative.itemNo,
           qty: group.qty,
+          availableQty,
+          repairQty,
           amount: group.amount,
-          availability,
           searchText,
           history,
         };
       })
       .filter((item) => !normalized || item.searchText.includes(normalized))
       .sort((left, right) => {
-        if (left.availability !== right.availability) {
-          return left.availability === 'Available' ? -1 : 1;
+        if ((left.availableQty > 0) !== (right.availableQty > 0)) {
+          return left.availableQty > 0 ? -1 : 1;
         }
 
         const leftSortValue = left.history[0]?.sortValue ?? 0;
         const rightSortValue = right.history[0]?.sortValue ?? 0;
         return rightSortValue - leftSortValue;
       });
-  }, [dispatchRecords, normalizedActiveProjectNo, query, receivingRequests, selectedItemType, stockItems, withdrawRecords]);
+  }, [dispatchRecords, normalizedActiveProjectNo, query, receivingRequests, repairShopItems, selectedItemType, stockItems, withdrawRecords]);
 
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
   const safeCurrentPage = Math.min(currentPage, totalPages);
@@ -489,12 +519,11 @@ export function StorePage() {
   };
 
   const handleStartEdit = (item: AggregatedStoreItem) => {
-    if (!isMasterAdmin) {
+    if (!isMasterAdmin || item.stockItemIds.length === 0) {
       return;
     }
 
     setEditingItem(item);
-    setEditItemNo(item.itemNo);
     setEditItemDescription(item.itemDescription);
     setEditError('');
   };
@@ -520,7 +549,7 @@ export function StorePage() {
       await updateProjectStockItem({
         projectNo: normalizedActiveProjectNo,
         stockItemIds: editingItem.stockItemIds,
-        itemNo: editItemNo,
+        itemNo: editingItem.itemNo,
         itemDescription: editItemDescription,
       });
       setEditingItem(null);
@@ -577,7 +606,8 @@ export function StorePage() {
               <th className={`${styles.totalQtyColumn} numeric`}>
                 {normalizedActiveProjectNo || 'Qty'}
               </th>
-              <th className={styles.statusColumn}>สถานะ</th>
+              <th className={`${styles.availableColumn} numeric`}>Available</th>
+              <th className={`${styles.repairColumn} numeric`}>Repair</th>
               <th className={`${styles.amountColumn} numeric`}>มูลค่า</th>
             </tr>
           </thead>
@@ -611,29 +641,24 @@ export function StorePage() {
                     <td className={`${styles.totalQtyCell} numeric ${item.qty === 0 ? 'muted' : ''}`}>
                       {item.qty === 0 ? '-' : item.qty.toLocaleString()}
                     </td>
-                    <td className={styles.statusCell}>
-                      <span
-                        className={`${styles.availabilityBadge} ${
-                          item.availability === 'Available'
-                            ? styles.available
-                            : styles.unavailable
-                        }`}
-                      >
-                        {item.availability}
-                      </span>
+                    <td className={`${styles.availableCell} numeric`}>
+                      {item.availableQty > 0 ? item.availableQty.toLocaleString() : ''}
+                    </td>
+                    <td className={`${styles.repairCell} numeric`}>
+                      {item.repairQty > 0 ? item.repairQty.toLocaleString() : ''}
                     </td>
                     <td className={`${styles.amountCell} numeric`}>{item.amount.toLocaleString()}</td>
                   </tr>
                   {isExpanded ? (
                     <tr className={styles.detailRow}>
-                      <td colSpan={5}>
+                      <td colSpan={6}>
                         <div className={styles.detailPanel}>
                           <div className={styles.detailHeader}>
                             <div>
                               <strong>{item.itemDescription}</strong>
                               <span className={styles.itemCodeLabel}>รหัส {item.itemNo}</span>
                             </div>
-                            {isMasterAdmin ? (
+                            {isMasterAdmin && item.stockItemIds.length > 0 ? (
                               <button
                                 type="button"
                                 className={styles.editButton}
@@ -683,6 +708,13 @@ export function StorePage() {
                                   <td className="numeric">{historyItem.amount.toLocaleString()}</td>
                                 </tr>
                               ))}
+                              {item.history.length === 0 ? (
+                                <tr>
+                                  <td colSpan={7} className="text-center py-4 text-slate-400 font-semibold text-sm">
+                                    รายการนี้อยู่ใน Repair Shop และไม่มีประวัติรับเข้าหรือเบิกในหน้านี้
+                                  </td>
+                                </tr>
+                              ) : null}
                             </tbody>
                           </table>
                         </div>
@@ -695,7 +727,7 @@ export function StorePage() {
             {filteredItems.length === 0 ? (
               <tr>
                 <td
-                  colSpan={5}
+                  colSpan={6}
                   className="text-center py-6 text-slate-400 font-semibold text-sm"
                 >
                   ไม่พบรายการสินค้าในโครงการและเงื่อนไขที่เลือก
@@ -844,14 +876,11 @@ export function StorePage() {
               />
             </label>
 
-            <label className={styles.formField}>
+            <div className={styles.readOnlyField}>
               <span>รหัสสินค้า</span>
-              <input
-                value={editItemNo}
-                onChange={(event) => setEditItemNo(event.target.value)}
-                required
-              />
-            </label>
+              <strong>{editingItem.itemNo || '-'}</strong>
+              <small>ไม่สามารถแก้ไขรหัสสินค้าจากหน้าต่างนี้ได้</small>
+            </div>
 
             <div className={styles.readOnlyField}>
               <span>จำนวนคงเหลือ</span>

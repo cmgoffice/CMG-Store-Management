@@ -16,6 +16,8 @@ type InventoryReceiveHistory = {
   projectNo: string;
   receiveDate: string;
   prNo: string;
+  status: StockStatus;
+  source: 'inventory' | 'repairShop';
   receivedByName: string;
   qty: number;
   amount: number;
@@ -202,6 +204,19 @@ export function StockListPage({
     () => items.filter((item) => matchesItemType(item, selectedItemType)),
     [items, selectedItemType]
   );
+  const categoryFilteredRepairShopItems = useMemo(
+    () => providedItems === undefined
+      ? repairShopItems.filter(
+          (item) => {
+            const status = String(item.status).trim().toLowerCase();
+            return status !== 'completed' &&
+              status !== 'repair completed' &&
+              matchesItemType(item, selectedItemType);
+          }
+        )
+      : [],
+    [providedItems, repairShopItems, selectedItemType]
+  );
   const projectByNo = useMemo(() => {
     return new Map(projects.map((project) => [normalizeProjectNo(project.projectNo), project]));
   }, [projects]);
@@ -284,6 +299,7 @@ export function StockListPage({
       string,
       {
         items: StockItem[];
+        repairItems: StockItem[];
         qty: number;
         amount: number;
         locations: Set<string>;
@@ -292,16 +308,23 @@ export function StockListPage({
       }
     >();
 
-    categoryFilteredStockItems.forEach((item) => {
+    const getOrCreateGroup = (item: StockItem) => {
       const groupKey = `${item.itemNo.trim().toLowerCase()}::${item.itemDescription.trim().toLowerCase()}`;
       const currentGroup = groupedItems.get(groupKey) ?? {
         items: [],
+        repairItems: [],
         qty: 0,
         amount: 0,
         locations: new Set<string>(),
         vendors: new Set<string>(),
         projectQty: new Map<string, number>(),
       };
+      groupedItems.set(groupKey, currentGroup);
+      return currentGroup;
+    };
+
+    categoryFilteredStockItems.forEach((item) => {
+      const currentGroup = getOrCreateGroup(item);
       const projectNo = getStockItemProjectNo(item);
 
       currentGroup.items.push(item);
@@ -315,13 +338,18 @@ export function StockListPage({
         projectNo,
         (currentGroup.projectQty.get(projectNo) ?? 0) + item.qty
       );
+    });
 
-      groupedItems.set(groupKey, currentGroup);
+    categoryFilteredRepairShopItems.forEach((item) => {
+      const currentGroup = getOrCreateGroup(item);
+
+      currentGroup.repairItems.push(item);
+      currentGroup.qty += item.qty;
     });
 
     return Array.from(groupedItems.values())
       .map((group) => {
-        const representative = group.items[0];
+        const representative = group.items[0] ?? group.repairItems[0];
         const location = Array.from(group.locations).filter(Boolean).join(', ') || '-';
         const vendorName = Array.from(group.vendors).join(', ') || '-';
         const projectQty = Array.from(group.projectQty.entries())
@@ -350,21 +378,18 @@ export function StockListPage({
         }, {});
         const purchasedForProject =
           projectQty.map((entry) => entry.projectNo).join(', ') || '-';
-        const repairItems = repairShopItems.filter((repairItem) =>
-          repairItem.itemNo.trim().toLowerCase() === representative.itemNo.trim().toLowerCase() &&
-          repairItem.itemDescription.trim().toLowerCase() === representative.itemDescription.trim().toLowerCase()
-        );
+        const repairItems = group.repairItems;
         const stockAvailableQty = group.items
           .filter((stockItem) => stockItem.status !== 'Repair' && stockItem.status !== 'Pending Repair')
           .reduce((total, stockItem) => total + stockItem.qty, 0);
         const availableQty = Math.max(0, stockAvailableQty);
         const repairQty = repairItems
-          .filter((repairItem) => repairItem.status === 'Repair')
+          .filter((repairItem) => repairItem.status === 'Repair' || repairItem.status === 'Pending Repair')
           .reduce((total, repairItem) => total + repairItem.qty, 0);
         const availability: InventoryAvailability = group.qty > 0 ? 'Available' : 'Unavailable';
-        const statuses = [...new Set(group.items.map((item) => item.status))];
-        const history = [...group.items]
-          .map((item) => {
+        const statuses = [...new Set([...group.items, ...repairItems].map((item) => item.status))];
+        const history = [
+          ...group.items.map((item) => {
             const requestKeys = [
               item.stockItemId,
               item.receiveNo,
@@ -407,12 +432,31 @@ export function StockListPage({
               projectNo,
               receiveDate: formatBangkokDateTime(rawReceiveDate),
               prNo,
+              status: item.status,
+              source: 'inventory' as const,
               receivedByName,
               qty: item.qty,
               amount: item.amount,
               sortValue: getDateSortValue(rawReceiveDate),
             };
-          })
+          }),
+          ...repairItems.map((item) => {
+            const rawReceiveDate = item.lastReceivedAt || item.receiveDate || '-';
+
+            return {
+              id: `repairShop-${item.stockItemId || item.receiveNo}`,
+              projectNo: getStockItemProjectNo(item),
+              receiveDate: formatBangkokDateTime(rawReceiveDate),
+              prNo: item.prNo || '-',
+              status: item.status,
+              source: 'repairShop' as const,
+              receivedByName: '-',
+              qty: item.qty,
+              amount: item.amount,
+              sortValue: getDateSortValue(rawReceiveDate),
+            };
+          }),
+        ]
           .sort((left, right) => right.sortValue - left.sortValue);
         const receiveDate = history[0]?.receiveDate || '-';
         const searchText = [
@@ -426,8 +470,8 @@ export function StockListPage({
           representative.materialNo,
           representative.iditem,
           ...projectQty.flatMap((entry) => [entry.projectNo, entry.projectName, String(entry.qty)]),
-          ...history.flatMap((entry) => [entry.prNo, entry.receivedByName, entry.receiveDate]),
-          ...group.items.flatMap((item) => [
+          ...history.flatMap((entry) => [entry.prNo, entry.receivedByName, entry.receiveDate, entry.status]),
+          ...[...group.items, ...repairItems].flatMap((item) => [
             item.receiveNo,
             item.prNo,
             item.poNo,
@@ -465,7 +509,7 @@ export function StockListPage({
         const rightSortValue = right.history[0]?.sortValue ?? 0;
         return rightSortValue - leftSortValue;
       });
-  }, [categoryFilteredStockItems, projectByNo, projectOrder, query, receivingRequests, repairShopItems]);
+  }, [categoryFilteredRepairShopItems, categoryFilteredStockItems, projectByNo, projectOrder, query, receivingRequests]);
 
   const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
   const safeCurrentPage = Math.min(currentPage, totalPages);
@@ -525,8 +569,18 @@ export function StockListPage({
                   {project.projectNo}
                 </th>
               ))}
-              <th className={`${styles.totalQtyColumn} numeric`}>จำนวนรวม</th>
-              {showItemStatus ? <th className={styles.statusColumn}>สถานะ</th> : <><th className={`${styles.availableColumn} numeric`}>Available</th><th className={`${styles.repairColumn} numeric`}>Repair</th></>}
+              {showItemStatus ? (
+                <>
+                  <th className={`${styles.totalQtyColumn} numeric`}>จำนวนรวม</th>
+                  <th className={styles.statusColumn}>สถานะ</th>
+                </>
+              ) : (
+                <>
+                  <th className={`${styles.repairColumn} numeric`}>Repair</th>
+                  <th className={`${styles.totalQtyColumn} numeric`}>จำนวนรวม</th>
+                  <th className={`${styles.availableColumn} numeric`}>Available</th>
+                </>
+              )}
               <th className={`${styles.amountColumn} numeric`}>มูลค่า</th>
             </tr>
           </thead>
@@ -569,14 +623,26 @@ export function StockListPage({
                         </td>
                       );
                     })}
-                    <td className={`${styles.totalQtyCell} numeric ${item.qty === 0 ? 'muted' : ''}`}>
-                      {item.qty === 0 ? '-' : item.qty.toLocaleString()}
-                    </td>
-                    {showItemStatus ? <td className={styles.statusCell}>
-                        <div className={styles.statusBadges}>
-                          {item.statuses.map((status) => <StatusBadge key={status} status={status} />)}
-                        </div>
-                    </td> : <><td className={`${styles.availableCell} numeric`}>{item.availableQty > 0 ? item.availableQty.toLocaleString() : ''}</td><td className={`${styles.repairCell} numeric`}>{item.repairQty > 0 ? item.repairQty.toLocaleString() : ''}</td></>}
+                    {showItemStatus ? (
+                      <>
+                        <td className={`${styles.totalQtyCell} numeric ${item.qty === 0 ? 'muted' : ''}`}>
+                          {item.qty === 0 ? '-' : item.qty.toLocaleString()}
+                        </td>
+                        <td className={styles.statusCell}>
+                          <div className={styles.statusBadges}>
+                            {item.statuses.map((status) => <StatusBadge key={status} status={status} />)}
+                          </div>
+                        </td>
+                      </>
+                    ) : (
+                      <>
+                        <td className={`${styles.repairCell} numeric`}>{item.repairQty > 0 ? item.repairQty.toLocaleString() : ''}</td>
+                        <td className={`${styles.totalQtyCell} numeric ${item.qty === 0 ? 'muted' : ''}`}>
+                          {item.qty === 0 ? '-' : item.qty.toLocaleString()}
+                        </td>
+                        <td className={`${styles.availableCell} numeric`}>{item.availableQty > 0 ? item.availableQty.toLocaleString() : ''}</td>
+                      </>
+                    )}
                     <td className={`${styles.amountCell} numeric`}>{item.amount.toLocaleString()}</td>
                   </tr>
                   {isExpanded ? (
@@ -596,7 +662,15 @@ export function StockListPage({
                                   <td>{historyItem.projectNo}</td>
                                   <td>{historyItem.receiveDate}</td>
                                   <td>{historyItem.prNo}</td>
-                                  <td>{historyItem.receivedByName}</td>
+                                  <td>
+                                    {historyItem.source === 'repairShop' ? (
+                                      <span className={styles.repairStatusBadge}>{historyItem.status}</span>
+                                    ) : historyItem.status === 'Pending Repair' ? (
+                                      <span className={styles.pendingRepairLabel}>Pending Repair</span>
+                                    ) : (
+                                      historyItem.receivedByName
+                                    )}
+                                  </td>
                                   <td className={`numeric ${styles.detailQtyColumn}`}>
                                     {historyItem.qty.toLocaleString()}
                                   </td>

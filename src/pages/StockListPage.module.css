@@ -184,6 +184,11 @@
   color: #c62828;
 }
 
+.inventoryTable .repairCell {
+  color: #c62828;
+  font-weight: 700;
+}
+
 .amountColumn,
 .amountCell {
   width: 92px;
@@ -244,6 +249,7 @@
 .projectQtyCell {
   font-size: 12px !important;
   font-weight: 700;
+  text-align: center !important;
 }
 
 .detailRow td {
@@ -489,6 +495,25 @@
 
 .detailTable td {
   color: var(--color-text);
+}
+
+.pendingRepairLabel {
+  color: #c50f1f;
+  font-weight: 700;
+}
+
+.repairStatusBadge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 20px;
+  border-radius: 9999px;
+  background: #fdeaea;
+  color: #c50f1f;
+  padding: 3px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 12px;
+  white-space: nowrap;
 }
 
 .detailQtyColumn {
