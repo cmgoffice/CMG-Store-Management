@@ -201,7 +201,7 @@ export function StockListPage({
     setQuery((currentQuery) => (currentQuery === nextQuery ? currentQuery : nextQuery));
   }, [searchParams]);
   const categoryFilteredStockItems = useMemo(
-    () => items.filter((item) => matchesItemType(item, selectedItemType)),
+    () => items.filter((item) => item.qty !== 0 && matchesItemType(item, selectedItemType)),
     [items, selectedItemType]
   );
   const categoryFilteredRepairShopItems = useMemo(
@@ -209,7 +209,8 @@ export function StockListPage({
       ? repairShopItems.filter(
           (item) => {
             const status = String(item.status).trim().toLowerCase();
-            return status !== 'completed' &&
+            return item.qty !== 0 &&
+              status !== 'completed' &&
               status !== 'repair completed' &&
               matchesItemType(item, selectedItemType);
           }
@@ -503,7 +504,7 @@ export function StockListPage({
           history,
         };
       })
-      .filter((item) => !normalized || item.searchText.includes(normalized))
+      .filter((item) => item.qty !== 0 && (!normalized || item.searchText.includes(normalized)))
       .sort((left, right) => {
         const leftSortValue = left.history[0]?.sortValue ?? 0;
         const rightSortValue = right.history[0]?.sortValue ?? 0;

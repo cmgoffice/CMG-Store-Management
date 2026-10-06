@@ -13,6 +13,18 @@ export function normalizeMaterialNo(value: unknown) {
   return String(value ?? '').trim().toUpperCase();
 }
 
+export function assertStockIdentityMatches(
+  stock: { itemNo: string; materialNo?: string },
+  expectedMaterialNo: string,
+) {
+  const expected = normalizeMaterialNo(expectedMaterialNo);
+  const materialNo = normalizeMaterialNo(stock.materialNo || stock.itemNo);
+  const itemNo = normalizeMaterialNo(stock.itemNo);
+  if (materialNo !== expected || (itemNo && itemNo !== expected)) {
+    throw new Error(`ข้อมูลสต็อกมีรหัสขัดกัน: itemNo ${stock.itemNo}, materialNo ${stock.materialNo || '-'} (รับเข้า ${expected}) กรุณาตรวจสอบข้อมูลเดิมก่อนรับเข้า`);
+  }
+}
+
 export function createStockIdentityKey(projectNo: string, materialNo: string) {
   const normalizedProjectNo = projectNo.trim().toUpperCase();
   const normalizedMaterialNo = normalizeMaterialNo(materialNo);

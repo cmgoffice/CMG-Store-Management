@@ -16,8 +16,6 @@ import {
   setDoc,
   onSnapshot,
   serverTimestamp,
-  getDocs,
-  deleteDoc
 } from 'firebase/firestore';
 import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
 import { APP_NAME } from '../config/firestore';
@@ -45,6 +43,7 @@ import type {
 } from '../types/models';
 import { getStockItemId, isStockItemAvailableForMovement } from '../utils/stockItem';
 import {
+  assertStockIdentityMatches,
   createStockIdentityDocumentId,
   normalizeMaterialNo,
 } from '../utils/stockIdentity';
@@ -726,6 +725,7 @@ function normalizeStockItem(data: DocumentData, fallbackId: string): StockItem {
         ? undefined
         : normalizeNumber(data.unitPrice),
     projectId: normalizeText(data.projectId),
+    cmgProjectCode: normalizeText(data.cmgProjectCode),
     vendorId: normalizeText(data.vendorId),
     documentNo: normalizeText(data.documentNo),
     poId:
@@ -2974,6 +2974,9 @@ export function InventoryProvider({ children }: PropsWithChildren) {
           ? normalizeStockItem(destinationSnapshot.data(), destinationSnapshot.id)
           : undefined;
         const base = groupedPlans[0];
+        if (existingDestinationItem) {
+          assertStockIdentityMatches(existingDestinationItem, base.plan.materialNo);
+        }
         const qtyToAdd = groupedPlans.reduce((sum, entry) => sum + entry.receivedQty, 0);
         const amountToAdd = groupedPlans.reduce((sum, entry) => sum + entry.receivedAmount, 0);
         const destinationRef = doc(db, APP_NAME, 'root', 'stockItems', destinationStockItemId);
@@ -3393,6 +3396,9 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     if (assignments.some(({ stockItemId }) => !stockItemId)) {
       throw new Error('พบรหัสสินค้าที่ไม่สามารถบันทึกได้');
     }
+    if (new Set(assignments.map(({ stockItemId }) => stockItemId)).size !== assignments.length) {
+      throw new Error('รหัสสินค้าหลายรายการชี้ไปยังสต็อกเดียวกัน กรุณาตรวจสอบข้อมูลเดิมก่อนนำเข้า');
+    }
 
     const chunkSize = 350;
     const assignmentChunks = Array.from(
@@ -3416,6 +3422,9 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         const existing = snapshot.exists()
           ? normalizeStockItem(snapshot.data(), snapshot.id)
           : undefined;
+        if (existing) {
+          assertStockIdentityMatches(existing, item.itemNo);
+        }
         transaction.set(doc(db, APP_NAME, 'root', 'stockItems', stockItemId), stripUndefined({
           stockItemId,
           receiveNo: existing?.receiveNo || requestId,
