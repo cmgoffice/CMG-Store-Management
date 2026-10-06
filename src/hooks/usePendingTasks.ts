@@ -3,6 +3,7 @@ import { collection, onSnapshot, query, where } from 'firebase/firestore';
 import { db } from '../firebase';
 import { useAuth } from '../context/AuthContext';
 import { useInventory } from '../context/InventoryContext';
+import { isWithdrawOverdue } from '../utils/withdraw';
 import type {
   CancellationRequest,
   ReceivingRequest,
@@ -72,6 +73,12 @@ export function usePendingTasks() {
   const { userProfile } = useAuth();
   const { allProjects, receivingRequests, dispatchRecords, stockItems, withdrawRecords, projectBorrowRequests, cancellationRequests } = useInventory();
   const [pendingUsers, setPendingUsers] = useState<PendingUser[]>([]);
+  const [now, setNow] = useState(Date.now);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (!userProfile?.role.includes('MasterAdmin')) {
@@ -177,14 +184,14 @@ export function usePendingTasks() {
       });
 
     withdrawRecords
-      .filter((record) => record.type === 'borrow' && record.status !== 'Returned' && record.status !== 'Cancelled')
+      .filter((record) => isWithdrawOverdue(record, now))
       .forEach((record) => {
         const projectNo = resolveProjectNo(record.projectNo);
         if (!canReturnWithdrawForProject(projectNo)) return;
         nextTasks.push({
           id: `withdraw:${record.id}`,
           type: 'withdraw',
-          title: 'สินค้ายืมรอคืน',
+          title: 'สินค้ายืมเกินกำหนดคืน',
           description: `${record.withdrawNo} · ${record.projectName || projectNo || 'ไม่ระบุโครงการ'}`,
           route: '/store/withdraw',
           projectNo,
@@ -245,7 +252,7 @@ export function usePendingTasks() {
     }
 
     return nextTasks.sort((left, right) => (right.timestamp || '').localeCompare(left.timestamp || ''));
-  }, [allProjects, cancellationRequests, dispatchRecords, pendingUsers, projectBorrowRequests, receivingRequests, stockItems, userProfile, withdrawRecords]);
+  }, [allProjects, cancellationRequests, dispatchRecords, now, pendingUsers, projectBorrowRequests, receivingRequests, stockItems, userProfile, withdrawRecords]);
 
   return { tasks };
 }

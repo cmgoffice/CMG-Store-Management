@@ -17,6 +17,7 @@ import { useRole } from '../context/RoleContext';
 import { useDialog } from '../context/DialogContext';
 import type { StockItem, WithdrawRecord, WithdrawRecordStatus, WithdrawType } from '../types/models';
 import { getStockItemId } from '../utils/stockItem';
+import { isWithdrawOverdue } from '../utils/withdraw';
 import '../styles/tables.css';
 import styles from './WithdrawPage.module.css';
 
@@ -103,19 +104,6 @@ function getStockItemProjectNo(item: StockItem) {
     extractProjectNoFromLabel(item.location) ||
     normalizeProjectNo(item.projectId)
   );
-}
-
-function isWithdrawOverdue(record: WithdrawRecord) {
-  if (record.type !== 'borrow' || record.status === 'Returned' || record.status === 'Cancelled' || !record.dueDate) {
-    return false;
-  }
-
-  const dueDate = new Date(record.dueDate.includes('T') ? record.dueDate : `${record.dueDate}T23:59:59`);
-  if (Number.isNaN(dueDate.getTime())) {
-    return false;
-  }
-
-  return dueDate.getTime() < Date.now();
 }
 
 function getEffectiveStatus(record: WithdrawRecord): WithdrawRecordStatus {

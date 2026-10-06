@@ -215,6 +215,42 @@
   min-width: 0;
 }
 
+.notificationItem[data-task-type='receiving'] {
+  background: #f0fdf4;
+}
+
+.notificationItem[data-task-type='receiving']:hover,
+.notificationItem[data-task-type='receiving']:focus-visible {
+  background: #dcfce7;
+}
+
+.notificationItem[data-task-type='receiving'] .notificationDot {
+  background: #16a34a;
+  box-shadow: 0 0 0 4px rgb(22 163 74 / 12%);
+}
+
+.notificationItem[data-task-type='receiving'] strong {
+  color: #166534;
+}
+
+.notificationItem[data-task-type='withdraw'] {
+  background: #fef2f2;
+}
+
+.notificationItem[data-task-type='withdraw']:hover,
+.notificationItem[data-task-type='withdraw']:focus-visible {
+  background: #fee2e2;
+}
+
+.notificationItem[data-task-type='withdraw'] .notificationDot {
+  background: #dc2626;
+  box-shadow: 0 0 0 4px rgb(220 38 38 / 12%);
+}
+
+.notificationItem[data-task-type='withdraw'] strong {
+  color: #991b1b;
+}
+
 .notificationItemText strong,
 .notificationItemText small {
   display: block;

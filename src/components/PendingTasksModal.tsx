@@ -40,7 +40,7 @@ export function PendingTasksModal({ tasks, onClose, onDismissToday }: PendingTas
 
         <div className={styles.list}>
           {tasks.map((task) => (
-            <button key={task.id} type="button" className={styles.task} onClick={() => handleTaskClick(task)}>
+            <button key={task.id} type="button" className={styles.task} data-task-type={task.type} onClick={() => handleTaskClick(task)}>
               <span className={styles.taskDot} />
               <span className={styles.taskText}>
                 <strong>{task.title}</strong>

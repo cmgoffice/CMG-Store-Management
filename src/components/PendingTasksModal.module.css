@@ -115,20 +115,53 @@
 }
 
 .task {
+  --task-border: #ffe0b8;
+  --task-accent: #ff8a1c;
+  --task-background: #fff8ee;
+  --task-hover-border: #ffb35c;
+  --task-hover-background: #fff0d9;
+  --task-dot: #ff7a00;
+  --task-rgb: 255 122 0;
+  --task-title: #9a4b00;
+  --task-link: #e66c00;
   display: flex;
   width: 100%;
   align-items: center;
   gap: 12px;
   margin-bottom: 8px;
   padding: 14px 12px;
-  border: 1px solid #ffe0b8;
-  border-left: 5px solid #ff8a1c;
+  border: 1px solid var(--task-border);
+  border-left: 5px solid var(--task-accent);
   border-radius: 12px;
-  background: #fff8ee;
+  background: var(--task-background);
   color: #2b2935;
   text-align: left;
   cursor: pointer;
-  box-shadow: 0 5px 14px rgb(255 122 0 / 8%);
+  box-shadow: 0 5px 14px rgb(var(--task-rgb) / 8%);
+}
+
+.task[data-task-type='receiving'] {
+  --task-border: #bbf7d0;
+  --task-accent: #22c55e;
+  --task-background: #f0fdf4;
+  --task-hover-border: #4ade80;
+  --task-hover-background: #dcfce7;
+  --task-dot: #16a34a;
+  --task-rgb: 22 163 74;
+  --task-title: #166534;
+  --task-link: #15803d;
+}
+
+.task[data-task-type='withdraw'] {
+  --task-border: #fecaca;
+  --task-accent: #ef4444;
+  --task-background: #fef2f2;
+  --task-hover-border: #f87171;
+  --task-hover-background: #fee2e2;
+  --task-dot: #dc2626;
+  --task-rgb: 220 38 38;
+  --task-title: #991b1b;
+  --task-link: #b91c1c;
 }
 
 .task:last-child {
@@ -137,8 +170,8 @@
 
 .task:hover,
 .task:focus-visible {
-  border-color: #ffb35c;
-  background: #fff0d9;
+  border-color: var(--task-hover-border);
+  background: var(--task-hover-background);
   outline: none;
 }
 
@@ -147,15 +180,15 @@
   height: 9px;
   flex: 0 0 auto;
   border-radius: 50%;
-  background: #ff7a00;
-  box-shadow: 0 0 0 5px rgb(255 122 0 / 12%);
+  background: var(--task-dot);
+  box-shadow: 0 0 0 5px rgb(var(--task-rgb) / 12%);
   animation: pendingDotPulse 1.5s ease-in-out infinite;
 }
 
 @keyframes pendingDotPulse {
   0%,
-  100% { box-shadow: 0 0 0 5px rgb(255 122 0 / 12%); }
-  50% { box-shadow: 0 0 0 8px rgb(255 122 0 / 0%); }
+  100% { box-shadow: 0 0 0 5px rgb(var(--task-rgb) / 12%); }
+  50% { box-shadow: 0 0 0 8px rgb(var(--task-rgb) / 0%); }
 }
 
 .taskText {
@@ -172,7 +205,7 @@
 }
 
 .taskText strong {
-  color: #9a4b00;
+  color: var(--task-title);
   font-size: 13px;
   font-weight: 800;
 }
@@ -185,7 +218,7 @@
 
 .taskArrow {
   flex: 0 0 auto;
-  color: #e66c00;
+  color: var(--task-link);
   font-size: 11px;
   font-weight: 800;
 }

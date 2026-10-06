@@ -195,7 +195,7 @@ export function Header({ menuButton, pendingTasks }: HeaderProps) {
                 </div>
                 <div className={styles.notificationList}>
                   {pendingTasks.length > 0 ? pendingTasks.map((task) => (
-                    <button key={task.id} type="button" className={styles.notificationItem} onClick={() => handleTaskClick(task)}>
+                    <button key={task.id} type="button" className={styles.notificationItem} data-task-type={task.type} onClick={() => handleTaskClick(task)}>
                       <span className={styles.notificationDot} />
                       <span className={styles.notificationItemText}>
                         <strong>{task.title}</strong>

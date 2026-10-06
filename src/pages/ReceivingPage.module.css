@@ -386,9 +386,11 @@
   padding: 10px 12px;
 }
 
-.dispatchTable th,
-.dispatchTable td {
+.dispatchTable:global(.table.compact) th,
+.dispatchTable:global(.table.compact) td {
   vertical-align: top;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .dispatchTable th:nth-child(1),

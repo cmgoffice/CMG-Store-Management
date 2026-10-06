@@ -1,4 +1,6 @@
 .sidebar {
+  --project-selected-offset: 24px;
+  --project-selected-scale: 1.4;
   position: sticky;
   top: 6px;
   z-index: 30;
@@ -54,15 +56,19 @@
 .projectStack {
   display: grid;
   flex: 1;
-  width: 100%;
+  width: calc(100% + 104px);
+  align-self: flex-start;
   align-content: start;
   justify-items: center;
   gap: 14px;
   margin-top: 96px;
+  margin-left: -8px;
   overflow-x: hidden;
   overflow-y: auto;
   padding-top: 12px;
   padding-bottom: 16px;
+  padding-right: 88px;
+  pointer-events: none;
   scrollbar-width: none;
 }
 
@@ -78,6 +84,18 @@
   display: inline-flex;
   isolation: isolate;
   z-index: 4;
+  pointer-events: auto;
+  transition: margin 260ms ease;
+}
+
+.projectSelectedWrap {
+  z-index: 6;
+  margin-block: 8px;
+}
+
+.projectSelectedWrap .projectBadge {
+  top: -18px;
+  right: calc(-8px - var(--project-selected-offset));
 }
 
 .projectDivider {
@@ -117,6 +135,9 @@
 
 .projectDot {
   padding: 0;
+  color: #24104a;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
   backface-visibility: hidden;
   transform: translateZ(0);
 }
@@ -157,15 +178,43 @@
   outline-offset: 2px;
 }
 
-.projectActive {
+.projectActive,
+.projectActive:hover,
+.projectActive:focus-visible {
   position: relative;
-  transform: translateZ(0);
+  border: 2px solid #fff;
+  transform: translateX(var(--project-selected-offset)) scale(var(--project-selected-scale));
+  animation: projectSelectExpand 320ms cubic-bezier(0.2, 0.8, 0.2, 1);
   box-shadow:
-    0 16px 28px rgb(35 19 120 / 38%),
-    0 0 0 3px rgb(255 255 255 / 18%),
-    inset 0 1px 0 rgb(255 255 255 / 26%);
-  filter: saturate(1.18) brightness(1.08);
+    0 0 0 3px rgb(255 255 255 / 30%),
+    0 0 8px 3px var(--project-glow, #c994ff),
+    0 0 18px 5px var(--project-glow, #c994ff),
+    0 8px 18px rgb(35 19 120 / 30%),
+    inset 0 1px 0 rgb(255 255 255 / 40%);
   z-index: 1;
+}
+
+@keyframes projectSelectExpand {
+  from {
+    transform: translateX(0) scale(1);
+  }
+
+  to {
+    transform: translateX(var(--project-selected-offset)) scale(var(--project-selected-scale));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .projectActive,
+  .projectActive:hover,
+  .projectActive:focus-visible {
+    animation: none;
+  }
+
+  .projectDot,
+  .projectDotWrap {
+    transition: none;
+  }
 }
 
 .projectActive::after {
@@ -182,35 +231,37 @@
 }
 
 .projectInactive {
-  opacity: 0.4;
-  transform: scale(0.7) translateZ(0);
-  filter: saturate(0.72) brightness(0.9);
+  opacity: 1;
+  transform: translateZ(0);
 }
 
 .projectInactive:hover,
 .projectInactive:focus-visible {
-  opacity: 0.72;
-  transform: scale(0.78) translateZ(0);
-  filter: saturate(0.92) brightness(0.98);
+  transform: translateY(-1px);
 }
 
 .projectTone1 {
-  background: linear-gradient(135deg, #f6d74a, #f5bb35);
+  --project-glow: #ffd36e;
+  background: linear-gradient(135deg, #ffe6a0, #ffc85c);
 }
 
 .projectTone2 {
-  background: linear-gradient(135deg, #c994ff, #9a76ff);
+  --project-glow: #c49aff;
+  background: linear-gradient(135deg, #dfbaff, #b58aff);
 }
 
 .projectTone3 {
-  background: linear-gradient(135deg, #ff7d93, #ff526c);
+  --project-glow: #ff9bc9;
+  background: linear-gradient(135deg, #ffc0df, #ff89b9);
 }
 
 .projectTone4 {
-  background: linear-gradient(135deg, #6be6ca, #38c592);
+  --project-glow: #7ce8d8;
+  background: linear-gradient(135deg, #a7f3e2, #64dcca);
 }
 
 .addProject {
+  pointer-events: auto;
   background: rgb(255 255 255 / 9%);
   color: rgb(255 255 255 / 70%);
 }
@@ -533,6 +584,8 @@
 
 @media (max-width: 1024px) {
   .sidebar {
+    --project-selected-offset: 0px;
+    --project-selected-scale: 1.15;
     width: 72px;
     grid-template-columns: 72px;
   }
@@ -548,6 +601,8 @@
 
 @media (max-width: 767px) {
   .sidebar {
+    --project-selected-offset: 24px;
+    --project-selected-scale: 1.4;
     position: fixed;
     left: 0;
     width: min(88vw, 280px);
@@ -583,6 +638,8 @@
 }
 
 .collapsedSidebar {
+  --project-selected-offset: 0px;
+  --project-selected-scale: 1.15;
   grid-template-columns: var(--sidebar-rail-width) !important;
   width: var(--sidebar-rail-width) !important;
 }

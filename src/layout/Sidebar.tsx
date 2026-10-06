@@ -227,7 +227,10 @@ export function Sidebar({ isOpen, onClose, isCollapsed, onToggleCollapse, pendin
     const badgeCount = projectActionBadges[normalizeProjectNoText(project.projectNo)] ?? 0;
 
     return (
-      <div key={project.projectNo} className={styles.projectDotWrap}>
+      <div
+        key={project.projectNo}
+        className={`${styles.projectDotWrap} ${activeProjectNo === project.projectNo ? styles.projectSelectedWrap : ''}`}
+      >
         <button
           className={`${styles.projectDot} ${
             activeProjectNo === project.projectNo ? styles.projectActive : ''
