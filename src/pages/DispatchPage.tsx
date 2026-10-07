@@ -5,7 +5,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { useInventory } from '../context/InventoryContext';
 import { useRole } from '../context/RoleContext';
 import type { DispatchRecord } from '../types/models';
-import { getStockItemId } from '../utils/stockItem';
+import { getStockItemId, isStockItemAvailableForMovement } from '../utils/stockItem';
 import '../styles/tables.css';
 import styles from './DispatchPage.module.css';
 
@@ -86,6 +86,7 @@ export function DispatchPage() {
   const { canDispatch, canCancelDispatch, hasRole } = useRole();
   const [query, setQuery] = useState('');
   const [selectedProject, setSelectedProject] = useState('');
+  const [selectedBorrowRequestId, setSelectedBorrowRequestId] = useState('');
   const [transport, setTransport] = useState('');
   const [note, setNote] = useState('');
   const [photoFiles, setPhotoFiles] = useState<File[]>([]);
@@ -135,8 +136,7 @@ export function DispatchPage() {
       const itemProjectNo = getStockItemProjectNo(item);
       const isAvailableInStoreInventory =
         itemProjectNo === normalizedActiveProjectNo &&
-        item.qty > 0 &&
-        item.status !== 'In Transit';
+        isStockItemAvailableForMovement(item);
 
       return isAvailableInStoreInventory;
     });
@@ -223,6 +223,7 @@ export function DispatchPage() {
         : '';
 
   const resetModalState = () => {
+    setSelectedBorrowRequestId('');
     photoUrls.forEach((url) => URL.revokeObjectURL(url));
     setTransport('');
     setNote('');
@@ -343,10 +344,11 @@ export function DispatchPage() {
     setSubmitError('');
     try {
       await createDispatch({
+        projectBorrowRequestId: selectedBorrowRequestId || undefined,
         sourceProjectNo: activeProjectNo,
         items: selectedDraftItems.map(({ item, qty }) => ({
           receiveNo: getStockItemId(item),
-          qty: Math.min(qty, item.qty),
+          qty,
         })),
         projectNo: selectedProject,
         transport,
@@ -421,7 +423,7 @@ export function DispatchPage() {
 
       {canDispatch && approvedBorrowRequests.length > 0 ? (
         <div className={styles.notice}>
-          มีคำขอยืมที่อนุมัติแล้ว {approvedBorrowRequests.length} รายการ — กรุณาเลือก EQM และโครงการปลายทางในหน้าจัดส่งนี้เพื่อทำ Dispatch ตามปกติ
+          มีคำขอยืมที่อนุมัติแล้ว {approvedBorrowRequests.length} รายการ — เลือกคำขอยืมในแบบฟอร์มจัดส่งเพื่อผูกสินค้าและจำนวนกับคำขอนั้น
         </div>
       ) : null}
 
@@ -556,13 +558,30 @@ export function DispatchPage() {
 
               <div className={styles.formGrid}>
                 <label className={styles.field}>
+                  <span>คำขอยืม</span>
+                  <select className={styles.select} value={selectedBorrowRequestId} onChange={event => {
+                    const id = event.target.value;
+                    setSelectedBorrowRequestId(id);
+                    setSubmitError('');
+                    const request = approvedBorrowRequests.find(record => record.id === id);
+                    setSelectedItemIds(request?.items.map(item => item.sourceStockItemId) ?? []);
+                    setDispatchQuantities(Object.fromEntries(request?.items.map(item => [item.sourceStockItemId, String(item.qty)]) ?? []));
+                    if (request) setSelectedProject(request.borrowerProjectNo);
+                  }}>
+                    <option value="">ย้ายโครงการทั่วไป</option>
+                    {approvedBorrowRequests.map(request => <option key={request.id} value={request.id}>{request.requestNo} → {request.borrowerProjectNo}</option>)}
+                  </select>
+                </label>
+                <label className={styles.field}>
                   <span>โครงการปลายทาง</span>
                   {destinationProjects.length > 0 ? (
                     <select
                       className={styles.select}
                       value={selectedProject}
+                      disabled={Boolean(selectedBorrowRequestId)}
                       onChange={(event) => setSelectedProject(event.target.value)}
                     >
+                      {selectedBorrowRequestId && !destinationProjects.some(project => project.projectNo === selectedProject) ? <option value={selectedProject}>Project {selectedProject}</option> : null}
                       {destinationProjects.map((project) => (
                         <option key={project.projectNo} value={project.projectNo}>
                           Project {project.projectNo} - {project.projectName}
@@ -592,6 +611,7 @@ export function DispatchPage() {
                   <button
                     className={styles.selectItemsButton}
                     type="button"
+                    disabled={Boolean(selectedBorrowRequestId)}
                     onClick={() => setIsItemPickerOpen(true)}
                   >
                     <ListPlus size={16} />
@@ -625,12 +645,14 @@ export function DispatchPage() {
                               type="text"
                               inputMode="numeric"
                               value={dispatchQuantities[stockItemId] ?? ''}
+                              disabled={Boolean(selectedBorrowRequestId)}
                               onChange={(event) => handleQtyChange(stockItemId, event.target.value)}
                               placeholder="0"
                             />
                             <button
                               className={styles.removeItemButton}
                               type="button"
+                              disabled={Boolean(selectedBorrowRequestId)}
                               onClick={() => removeSelectedItem(stockItemId)}
                               aria-label={`Remove ${item.receiveNo}`}
                               title="ลบรายการ"

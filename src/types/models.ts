@@ -223,6 +223,7 @@ export interface DispatchItemSnapshot {
 }
 
 export interface DispatchRecord {
+  projectBorrowRequestId?: string;
   id: string;
   dispatchNo: string;
   sourceProjectNo: string;

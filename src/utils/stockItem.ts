@@ -5,7 +5,7 @@ export function getStockItemId(item: Pick<StockItem, 'receiveNo' | 'stockItemId'
 }
 
 export function isStockItemAvailableForMovement(item: Pick<StockItem, 'qty' | 'status'>) {
-  return item.qty > 0 && !['In Transit', 'Borrowed', 'Withdrawn'].includes(item.status);
+  return item.qty > 0 && ['Available', 'Received at Site', 'Pending Dispatch'].includes(item.status);
 }
 
 export function isStockItemReadyForUse(item: Pick<StockItem, 'status'>) {

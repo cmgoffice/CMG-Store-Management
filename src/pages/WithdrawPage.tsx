@@ -16,7 +16,7 @@ import { useInventory } from '../context/InventoryContext';
 import { useRole } from '../context/RoleContext';
 import { useDialog } from '../context/DialogContext';
 import type { StockItem, WithdrawRecord, WithdrawRecordStatus, WithdrawType } from '../types/models';
-import { getStockItemId } from '../utils/stockItem';
+import { getStockItemId, isStockItemAvailableForMovement } from '../utils/stockItem';
 import { isWithdrawOverdue } from '../utils/withdraw';
 import '../styles/tables.css';
 import styles from './WithdrawPage.module.css';
@@ -171,10 +171,7 @@ export function WithdrawPage() {
       const itemProjectNo = getStockItemProjectNo(item);
       return (
         itemProjectNo === normalizedActiveProjectNo &&
-        item.qty > 0 &&
-        item.status !== 'In Transit' &&
-        item.status !== 'Borrowed' &&
-        item.status !== 'Withdrawn'
+        isStockItemAvailableForMovement(item)
       );
     });
   }, [normalizedActiveProjectNo, stockItems]);

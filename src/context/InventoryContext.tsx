@@ -11,6 +11,7 @@ import {
   collection,
   doc,
   type DocumentData,
+  type Transaction,
   addDoc,
   runTransaction,
   setDoc,
@@ -56,6 +57,7 @@ interface CreateDispatchLineInput {
 }
 
 interface CreateDispatchInput {
+  projectBorrowRequestId?: string;
   sourceProjectNo: string;
   items: CreateDispatchLineInput[];
   projectNo: string;
@@ -361,7 +363,11 @@ function createDispatchNumber() {
   const hh = String(now.getHours()).padStart(2, '0');
   const min = String(now.getMinutes()).padStart(2, '0');
   const ss = String(now.getSeconds()).padStart(2, '0');
-  return `DSP-${yyyy}${mm}${dd}-${hh}${min}${ss}`;
+  return `DSP-${yyyy}${mm}${dd}-${hh}${min}${ss}-${createDocumentSuffix()}`;
+}
+
+function createDocumentSuffix() {
+  return doc(collection(db, APP_NAME, 'root', 'documentIds')).id;
 }
 
 function getProjectShortNo(projectNo: string) {
@@ -378,7 +384,7 @@ function createWithdrawNumber(projectNo: string) {
   const min = String(now.getMinutes()).padStart(2, '0');
   const ss = String(now.getSeconds()).padStart(2, '0');
   const ms = String(now.getMilliseconds()).padStart(3, '0');
-  return `${getProjectShortNo(projectNo)}-WD-${yyyy}${mm}${dd}-${hh}${min}${ss}${ms}`;
+  return `${getProjectShortNo(projectNo)}-WD-${yyyy}${mm}${dd}-${hh}${min}${ss}${ms}-${createDocumentSuffix()}`;
 }
 
 function createProjectBorrowNumber(projectNo: string) {
@@ -392,12 +398,12 @@ function createProjectBorrowNumber(projectNo: string) {
     String(now.getSeconds()).padStart(2, '0'),
     String(now.getMilliseconds()).padStart(3, '0'),
   ].join('');
-  return `${getProjectShortNo(projectNo)}-BR-${stamp}`;
+  return `${getProjectShortNo(projectNo)}-BR-${stamp}-${createDocumentSuffix()}`;
 }
 
 function createCancellationNumber() {
   const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 17);
-  const suffix = Math.random().toString(36).slice(2, 6).toUpperCase();
+  const suffix = createDocumentSuffix();
   return `CAN-${stamp}-${suffix}`;
 }
 
@@ -628,7 +634,17 @@ function normalizeReceivingRequest(data: DocumentData, fallbackId: string): Rece
       ? (data.header as DocumentData)
       : ({} as DocumentData);
   const items = parseReceivingItems(data.items)
-    .map((item, index) => normalizeReceivingRequestItem(item as DocumentData, index))
+    .map((item, index) => {
+      const raw = item as DocumentData;
+      const normalized = normalizeReceivingRequestItem(raw, index);
+      if (normalizeReceivingRequestStatus(data.requestStatus ?? data.status) === 'pending' && raw.stockRequestedQty !== undefined) {
+        return { ...normalized,
+          receivedQty: Math.max(0, normalizeNumber(raw.stockRequestedQty) - normalized.receivedQty),
+          amount: Math.max(0, roundAmount(normalizeNumber(raw.stockRequestedAmount) - normalized.amount)),
+        };
+      }
+      return normalized;
+    })
     .filter((item) => item.receivedQty > 0);
   const projectNo = normalizeProjectNoFromRequest(data);
   const totalQty = normalizeNumber(data.totalQty, items.reduce((sum, item) => sum + item.receivedQty, 0));
@@ -773,6 +789,8 @@ function findStockItemByIdentity(
     .filter((item) => (
       !excludedIdSet.has(getStockItemId(item)) &&
       item.status !== 'In Transit' &&
+      item.status !== 'Borrowed' &&
+      !item.projectBorrowRequestNo &&
       getStockItemProjectNo(item) === normalizedProjectNo &&
       getStockItemMaterialNo(item) === normalizedMaterialNo
     ))
@@ -783,6 +801,144 @@ function findStockItemByIdentity(
       const rightScore = Number(Boolean(right.materialNo)) * 2 + Number(rightId === deterministicId);
       return rightScore - leftScore || leftId.localeCompare(rightId);
     })[0];
+}
+
+async function restoreProjectBorrowStock(
+  transaction: Transaction,
+  request: ProjectBorrowRequest,
+  restoredAt: string,
+  reason?: string,
+) {
+  // Never infer a return from the request alone: the borrower must still hold it.
+  if (!request.items.length || new Set(request.items.map(item => item.borrowedStockItemId)).size !== request.items.length) {
+    throw new Error('ข้อมูลสต็อกผู้ยืมซ้ำหรือไม่ครบ กรุณาตรวจสอบก่อนคืน');
+  }
+  const sourceIds = Array.from(new Set(request.items.map(item => item.sourceStockItemId)));
+  if (request.items.some(item => !item.sourceStockItemId || !item.borrowedStockItemId || sourceIds.includes(item.borrowedStockItemId))) {
+    throw new Error('ไม่พบรหัสสต็อกผู้ยืมที่แยกจากต้นทาง กรุณาตรวจสอบก่อนคืน');
+  }
+  const sourceRefs = sourceIds.map(id => doc(db, APP_NAME, 'root', 'stockItems', id));
+  const borrowedRefs = request.items.map(item => doc(db, APP_NAME, 'root', 'stockItems', item.borrowedStockItemId!));
+  const sourceSnapshots = await Promise.all(sourceRefs.map(stockRef => transaction.get(stockRef)));
+  const borrowedSnapshots = await Promise.all(borrowedRefs.map(stockRef => transaction.get(stockRef)));
+  const sources = new Map(sourceIds.map((id, index) => {
+    const snapshot = sourceSnapshots[index];
+    if (!snapshot.exists()) throw new Error(`ไม่พบสต็อกต้นทาง ${id} จึงไม่สามารถรับคืนได้`);
+    return [id, { item: normalizeStockItem(snapshot.data(), snapshot.id), qty: 0, amount: 0 }];
+  }));
+  const plans = request.items.map((item, index) => {
+    const snapshot = borrowedSnapshots[index];
+    if (!snapshot.exists()) throw new Error(`ไม่พบสต็อกผู้ยืมของ ${item.itemNo} จึงไม่สามารถคืนยอดได้`);
+    const borrowed = normalizeStockItem(snapshot.data(), snapshot.id);
+    const source = sources.get(item.sourceStockItemId)!;
+    const materialNo = normalizeMaterialNo(item.materialNo || item.itemNo);
+    assertStockIdentityMatches(source.item, materialNo);
+    assertStockIdentityMatches(borrowed, materialNo);
+    if (!projectNoMatches(getStockItemProjectNo(source.item), request.lenderProjectNo) ||
+        !projectNoMatches(getStockItemProjectNo(borrowed), request.borrowerProjectNo) ||
+        borrowed.projectBorrowRequestNo !== request.requestNo || borrowed.status !== 'Borrowed') {
+      throw new Error(`สต็อก ${item.itemNo} ไม่ตรงกับคำขอยืมนี้ กรุณาตรวจสอบก่อนคืน`);
+    }
+    if (!Number.isSafeInteger(item.qty) || item.qty <= 0 ||
+        (item.receivedQty ?? 0) < item.qty || borrowed.qty < item.qty) {
+      throw new Error(`ยอดผู้ยืมของ ${item.itemNo} ไม่ครบ ${item.qty} ชิ้น รายการจะยังไม่ปิดจนกว่าจะคืนครบ`);
+    }
+    const amount = calculatePartialAmount(borrowed.amount, borrowed.qty, item.qty);
+    source.qty += item.qty;
+    source.amount = roundAmount(source.amount + amount);
+    return { borrowed, ref: borrowedRefs[index], qty: item.qty, amount };
+  });
+  sources.forEach(({ item, qty, amount }, id) => {
+    transaction.update(doc(db, APP_NAME, 'root', 'stockItems', id), stripUndefined({
+      qty: item.qty + qty,
+      amount: roundAmount(item.amount + amount),
+      status: item.qty > 0 ? item.status : 'Available',
+      lastProjectBorrowReturnNo: request.requestNo,
+      lastProjectBorrowReturnedAt: restoredAt,
+      lastCancellationReason: reason,
+    }));
+  });
+  plans.forEach(({ borrowed, ref: borrowedRef, qty, amount }) => {
+    if (borrowed.qty === qty) transaction.delete(borrowedRef);
+    else transaction.update(borrowedRef, {
+      qty: borrowed.qty - qty,
+      amount: roundAmount(borrowed.amount - amount),
+    });
+  });
+}
+
+async function restoreCancelledDispatchStock(
+  transaction: Transaction,
+  dispatch: DispatchRecord,
+  cancelledAt: string,
+  knownBorrowRequests: ProjectBorrowRequest[],
+  reason?: string,
+) {
+  if (dispatch.status !== 'Pending Receipt' || dispatch.items.some(item => (item.receivedQty ?? 0) > 0)) {
+    throw new Error('รายการนี้รับเข้าแล้ว กรุณาทำรายการย้ายคืนแทนการยกเลิก');
+  }
+  if (!dispatch.items.length || new Set(dispatch.items.map(item => item.stockReceiveNo)).size !== dispatch.items.length) {
+    throw new Error('ข้อมูลสินค้าระหว่างจัดส่งซ้ำหรือไม่ครบ');
+  }
+  const stockIds = Array.from(new Set(dispatch.items.flatMap(item => [
+    item.sourceStockItemId || item.stockItemId || item.receiveNo, item.stockReceiveNo,
+  ])));
+  const snapshots = await Promise.all(stockIds.map(id => transaction.get(doc(db, APP_NAME, 'root', 'stockItems', id))));
+  const stocks = new Map(stockIds.map((id, index) => [id, snapshots[index]]));
+  const borrowIds = dispatch.projectBorrowRequestId ? [dispatch.projectBorrowRequestId] :
+    knownBorrowRequests.filter(request => request.dispatchNo === dispatch.dispatchNo).map(request => request.id);
+  const borrowRefs = borrowIds.map(id => doc(db, APP_NAME, 'root', 'projectBorrowRequests', id));
+  const borrowSnapshots = await Promise.all(borrowRefs.map(requestRef => transaction.get(requestRef)));
+  const borrows = borrowSnapshots.map(snapshot => {
+    if (!snapshot.exists()) throw new Error('ไม่พบคำขอยืมที่ผูกกับใบจัดส่งนี้');
+    const request = normalizeProjectBorrowRequest(snapshot.data(), snapshot.id);
+    if (request.status !== 'In Transit' || request.dispatchNo !== dispatch.dispatchNo) {
+      throw new Error('สถานะคำขอยืมไม่ตรงกับใบจัดส่ง กรุณาตรวจสอบก่อนยกเลิก');
+    }
+    return request;
+  });
+  const restorations = new Map<string, { item: StockItem; qty: number; amount: number }>();
+  dispatch.items.forEach(item => {
+    const sourceId = item.sourceStockItemId || item.stockItemId || item.receiveNo;
+    const transitSnapshot = stocks.get(item.stockReceiveNo);
+    const sourceSnapshot = stocks.get(sourceId);
+    if (sourceId === item.stockReceiveNo || !transitSnapshot?.exists()) throw new Error('ไม่พบสต็อกระหว่างจัดส่งที่แยกจากต้นทาง');
+    const transit = normalizeStockItem(transitSnapshot.data(), transitSnapshot.id);
+    const source = sourceSnapshot?.exists() ? normalizeStockItem(sourceSnapshot.data(), sourceSnapshot.id) : undefined;
+    const materialNo = normalizeMaterialNo(item.materialNo || item.itemNo);
+    assertStockIdentityMatches(transit, materialNo);
+    if (source) assertStockIdentityMatches(source, materialNo);
+    if (transit.status !== 'In Transit' || transit.qty !== item.qty ||
+        !projectNoMatches(getStockItemProjectNo(transit), dispatch.destinationProjectNo) ||
+        (source && !projectNoMatches(getStockItemProjectNo(source), dispatch.sourceProjectNo)) ||
+        (transit.projectBorrowRequestNo && !borrows.some(request => request.requestNo === transit.projectBorrowRequestNo))) {
+      throw new Error('ยอดหรือโครงการของสต็อกไม่ตรงกับใบจัดส่ง กรุณาตรวจสอบก่อนยกเลิก');
+    }
+    const group = restorations.get(sourceId) ?? {
+      item: source ?? { ...transit, stockItemId: sourceId, receiveNo: item.receiveNo, qty: 0, amount: 0,
+        status: 'Received at Site', location: item.sourceLocation, purchasedForProject: createProjectLabel(dispatch.sourceProjectNo),
+        cmgProjectCode: normalizeProjectNoText(dispatch.sourceProjectNo), projectBorrowRequestNo: undefined,
+        borrowedFromProjectNo: undefined, borrowerProjectNo: undefined }, qty: 0, amount: 0,
+    };
+    group.qty += transit.qty;
+    group.amount = roundAmount(group.amount + transit.amount);
+    restorations.set(sourceId, group);
+  });
+  restorations.forEach(({ item, qty, amount }, id) => transaction.set(doc(db, APP_NAME, 'root', 'stockItems', id), stripUndefined({
+    ...item, qty: item.qty + qty, amount: roundAmount(item.amount + amount),
+    lastCancelledDispatchNo: dispatch.dispatchNo, lastCancelledDispatchAt: cancelledAt, lastCancellationReason: reason,
+  }), { merge: true }));
+  dispatch.items.forEach(item => transaction.delete(doc(db, APP_NAME, 'root', 'stockItems', item.stockReceiveNo)));
+  borrows.forEach((request, index) => transaction.update(borrowRefs[index], {
+    status: 'Pending Dispatch', dispatchNo: null, dispatchedAt: null,
+    items: request.items.map(item => ({ ...item, dispatchStockItemId: null, borrowedStockItemId: null, receivedQty: 0 })),
+  }));
+}
+
+function assertReceivingCanBeReversed(request: ReceivingRequest) {
+  if (request.sourceApp === 'Project Transfer' || request.poType === 'Project Transfer') {
+    throw new Error('ประวัติรับเข้าจากการย้ายต้องทำรายการย้ายคืน ไม่สามารถลบหรือยกเลิกเพื่อหักยอดได้');
+  }
 }
 
 function normalizeWithdrawRecord(data: DocumentData, fallbackId: string): WithdrawRecord {
@@ -1406,6 +1562,9 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     const normalizedLines = selectedLines
       .map((line) => ({ stockItemId: line.stockItemId, qty: Number(line.qty) }))
       .filter((line) => line.stockItemId && Number.isFinite(line.qty) && line.qty > 0);
+    if (normalizedLines.length !== selectedLines.length || !normalizedLines.length || normalizedLines.some(line => !Number.isSafeInteger(line.qty))) {
+      throw new Error('จำนวนขอยืมต้องเป็นจำนวนเต็มมากกว่า 0 ทุกรายการ');
+    }
     if (new Set(normalizedLines.map((line) => line.stockItemId)).size !== normalizedLines.length) {
       throw new Error('ไม่สามารถเลือกรายการเดิมซ้ำในคำขอเดียวกันได้');
     }
@@ -1468,7 +1627,23 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       totalQty: selectedItems.reduce((sum, item) => sum + item.qty, 0),
       createdAt,
     };
-    await setDoc(doc(db, APP_NAME, 'root', 'projectBorrowRequests', requestNo), stripUndefined(request));
+    const requestRef = doc(db, APP_NAME, 'root', 'projectBorrowRequests', requestNo);
+    await runTransaction(db, async transaction => {
+      if ((await transaction.get(requestRef)).exists()) throw new Error('เลขที่คำขอยืมซ้ำ กรุณาลองใหม่');
+      const sources = await Promise.all(request.items.map(item => transaction.get(doc(db, APP_NAME, 'root', 'stockItems', item.sourceStockItemId))));
+      const currentItems = request.items.map((item, index) => {
+        const snapshot = sources[index];
+        if (!snapshot.exists()) throw new Error('ไม่พบสต็อกต้นทาง กรุณารีเฟรช');
+        const source = normalizeStockItem(snapshot.data(), snapshot.id);
+        assertStockIdentityMatches(source, item.materialNo || item.itemNo);
+        if (!projectNoMatches(getStockItemProjectNo(source), lenderProject.projectNo) ||
+            !isStockItemAvailableForMovement(source) || !matchesProjectBorrowItemType(source) || source.qty < item.qty) {
+          throw new Error('สต็อกต้นทางเปลี่ยนแปลงหรือไม่พอ กรุณารีเฟรช');
+        }
+        return { ...item, amount: calculatePartialAmount(source.amount, source.qty, item.qty), sourceStatus: source.status, sourceLocation: source.location };
+      });
+      transaction.set(requestRef, stripUndefined({ ...request, items: currentItems }));
+    });
     await logInventoryActivity('TRANSFER_REQUEST', userProfile, {
       requestNo,
       borrowerProjectNo: borrowerProject.projectNo,
@@ -1505,6 +1680,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       if (!requestSnapshot.exists()) throw new Error('ไม่พบคำขอยืมนี้แล้ว');
       const current = normalizeProjectBorrowRequest(requestSnapshot.data(), requestId);
       if (current.status !== 'Pending Approval') throw new Error('คำขอนี้ถูกดำเนินการไปแล้ว');
+      if (!getProjectBorrowApprover(current) || current.requestedByUid === approverUid) throw new Error('ไม่มีสิทธิ์อนุมัติคำขอยืมนี้');
       transaction.set(requestRef, stripUndefined({
         status: 'Pending Dispatch',
         approvalStep: 1,
@@ -1525,12 +1701,19 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     if (!target || target.status !== 'Pending Approval') return;
     if (!getProjectBorrowApprover(target)) throw new Error('เฉพาะผู้มีสิทธิ์ของโครงการผู้ให้ยืมเท่านั้นที่ปฏิเสธได้');
     const rejectedAt = new Date().toISOString();
-    await setDoc(doc(db, APP_NAME, 'root', 'projectBorrowRequests', requestId), {
+    const requestRef = doc(db, APP_NAME, 'root', 'projectBorrowRequests', requestId);
+    await runTransaction(db, async transaction => {
+      const snapshot = await transaction.get(requestRef);
+      if (!snapshot.exists()) throw new Error('Request no longer exists. Please refresh.');
+      const current = normalizeProjectBorrowRequest(snapshot.data(), snapshot.id);
+      if (current.status !== 'Pending Approval' || !getProjectBorrowApprover(current)) throw new Error('Request status or permissions changed. Please refresh.');
+      transaction.update(requestRef, {
       status: 'Rejected',
       rejectedAt,
       rejectedByUid: userProfile?.uid ?? '',
       rejectedByName: formatPersonName(userProfile?.firstName, userProfile?.lastName, userProfile?.email ?? 'Approver'),
-    }, { merge: true });
+    });
+    });
     await logInventoryActivity('TRANSFER_REJECT', userProfile, {
       requestNo: target.requestNo,
       borrowerProjectNo: target.borrowerProjectNo,
@@ -1544,12 +1727,19 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     const canReturn = userProfile?.role.includes('MasterAdmin') || userProfile?.role.includes('Store Center') ||
       userProfile?.assignedProjects?.some((projectNo) => projectNoMatches(projectNo, target.borrowerProjectNo));
     if (!canReturn) throw new Error('เฉพาะโครงการผู้ยืมเท่านั้นที่แจ้งคืนได้');
-    await setDoc(doc(db, APP_NAME, 'root', 'projectBorrowRequests', requestId), {
-      status: 'Return Requested',
-      returnRequestedAt: new Date().toISOString(),
-      returnRequestedByUid: userProfile?.uid ?? '',
-      returnRequestedByName: formatPersonName(userProfile?.firstName, userProfile?.lastName, userProfile?.email ?? 'User'),
-    }, { merge: true });
+    const requestRef = doc(db, APP_NAME, 'root', 'projectBorrowRequests', requestId);
+    await runTransaction(db, async transaction => {
+      const snapshot = await transaction.get(requestRef);
+      if (!snapshot.exists() || normalizeProjectBorrowStatus(snapshot.data().status) !== 'Borrowed') {
+        throw new Error('สถานะคำขอยืมเปลี่ยนไป กรุณารีเฟรชแล้วลองใหม่');
+      }
+      transaction.update(requestRef, {
+        status: 'Return Requested',
+        returnRequestedAt: new Date().toISOString(),
+        returnRequestedByUid: userProfile?.uid ?? '',
+        returnRequestedByName: formatPersonName(userProfile?.firstName, userProfile?.lastName, userProfile?.email ?? 'User'),
+      });
+    });
     await logInventoryActivity('TRANSFER_RETURN_REQUEST', userProfile, {
       requestNo: target.requestNo,
       borrowerProjectNo: target.borrowerProjectNo,
@@ -1570,48 +1760,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       if (!requestSnapshot.exists()) throw new Error('ไม่พบคำขอยืมนี้แล้ว');
       const current = normalizeProjectBorrowRequest(requestSnapshot.data(), requestId);
       if (current.status !== 'Return Requested') throw new Error('คำขอนี้ยังไม่อยู่ระหว่างรอรับคืน');
-      const sourceRefs = current.items.map((item) => doc(db, APP_NAME, 'root', 'stockItems', item.sourceStockItemId));
-      const borrowedRefs = current.items.map((item) => item.borrowedStockItemId
-        ? doc(db, APP_NAME, 'root', 'stockItems', item.borrowedStockItemId)
-        : null);
-      const sourceSnapshots = await Promise.all(sourceRefs.map((sourceRef) => transaction.get(sourceRef)));
-      const borrowedSnapshots = await Promise.all(borrowedRefs.map((borrowedRef) => borrowedRef ? transaction.get(borrowedRef) : null));
-      current.items.forEach((item, index) => {
-        const sourceSnapshot = sourceSnapshots[index];
-        const sourceItem = sourceSnapshot.exists() ? normalizeStockItem(sourceSnapshot.data(), sourceSnapshot.id) : undefined;
-        const borrowedSnapshot = borrowedSnapshots[index];
-        const borrowedItem = borrowedSnapshot?.exists() ? normalizeStockItem(borrowedSnapshot.data(), borrowedSnapshot.id) : undefined;
-        const qtyToRestore = Math.min(item.qty, borrowedItem?.qty ?? item.receivedQty ?? item.qty);
-        const amountToRestore = borrowedItem?.amount ?? item.amount;
-        if (!sourceItem) {
-          throw new Error(`ไม่พบสต็อกต้นทางของ ${item.itemNo} จึงไม่สามารถรับคืนได้`);
-        }
-        transaction.set(sourceRefs[index], stripUndefined({
-          ...sourceItem,
-          stockItemId: item.sourceStockItemId,
-          receiveNo: sourceItem.receiveNo || item.receiveNo,
-          qty: sourceItem.qty + qtyToRestore,
-          amount: roundAmount(sourceItem.amount + amountToRestore),
-          status: 'Available',
-          location: sourceItem.location || item.sourceLocation,
-          purchasedForProject: sourceItem.purchasedForProject || createProjectLabel(current.lenderProjectNo),
-          cmgProjectCode: current.lenderProjectNo,
-          lastProjectBorrowReturnNo: current.requestNo,
-          lastProjectBorrowReturnedAt: returnedAt,
-        }), { merge: true });
-        if (borrowedRefs[index] && borrowedItem) {
-          const remainingQty = borrowedItem.qty - qtyToRestore;
-          if (remainingQty <= 0) {
-            transaction.delete(borrowedRefs[index]);
-          } else {
-            transaction.update(borrowedRefs[index], {
-              qty: remainingQty,
-              amount: Math.max(0, roundAmount(borrowedItem.amount - amountToRestore)),
-              status: borrowedItem.status === 'Borrowed' ? 'Received at Site' : borrowedItem.status,
-            });
-          }
-        }
-      });
+      await restoreProjectBorrowStock(transaction, current, returnedAt);
       transaction.set(requestRef, {
         status: 'Returned',
         returnedAt,
@@ -1630,7 +1779,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
   const getCancellationTarget = useCallback((entityType: CancellationEntityType, entityId: string) => {
     if (entityType === 'projectStock') {
       const target = visibleStockItems.find((item) => getStockItemId(item) === entityId);
-      if (!target || target.qty <= 0 || target.status === 'In Transit' || target.status === 'Pending Dispatch') return null;
+      if (!target || target.qty <= 0 || target.projectBorrowRequestNo || target.status === 'Borrowed' || target.status === 'In Transit' || target.status === 'Pending Dispatch') return null;
       return {
         referenceNo: target.itemNo || target.receiveNo,
         projectNos: [getStockItemProjectNo(target)].filter(Boolean),
@@ -1641,6 +1790,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     if (entityType === 'receiving') {
       const target = receivingRequestList.find((request) => request.id === entityId);
       if (!target || target.requestStatus !== 'approved') return null;
+      assertReceivingCanBeReversed(target);
       return {
         referenceNo: target.receiveNo,
         projectNos: [target.projectNo || target.cmgProjectCode].filter(Boolean),
@@ -1727,7 +1877,11 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       requestedAt,
     };
 
-    await setDoc(doc(db, APP_NAME, 'root', 'cancellationRequests', cancellationNo), stripUndefined(request));
+    const requestRef = doc(db, APP_NAME, 'root', 'cancellationRequests', cancellationNo);
+    await runTransaction(db, async transaction => {
+      if ((await transaction.get(requestRef)).exists()) throw new Error('เลขที่คำขอยกเลิกซ้ำ กรุณาลองใหม่');
+      transaction.set(requestRef, stripUndefined(request));
+    });
     await logInventoryActivity('CANCEL', userProfile, {
       cancellationNo,
       entityType,
@@ -1773,6 +1927,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       if (!cancellationSnapshot.exists()) throw new Error('ไม่พบคำขอยกเลิกนี้แล้ว');
       const current = normalizeCancellationRequest(cancellationSnapshot.data(), requestId);
       if (current.status !== 'Pending Approval') throw new Error('คำขอยกเลิกนี้ถูกดำเนินการไปแล้ว');
+      if (!canApproveCancellation(current) || current.requestedByUid === approverUid) throw new Error('ไม่มีสิทธิ์อนุมัติคำขอยกเลิกนี้');
 
       if (current.approvalStep === 0) {
         transaction.set(cancellationRef, {
@@ -1793,6 +1948,9 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         const entitySnapshot = await transaction.get(entityRef);
         if (!entitySnapshot.exists()) throw new Error('ไม่พบสินค้าในคลังโครงการ');
         const stockItem = normalizeStockItem(entitySnapshot.data(), entitySnapshot.id);
+        if (stockItem.projectBorrowRequestNo || ['Borrowed', 'In Transit', 'Pending Dispatch'].includes(stockItem.status)) {
+          throw new Error('สต็อกอยู่ระหว่างยืมหรือจัดส่ง ไม่สามารถยกเลิกยอดโดยตรงได้');
+        }
         const cancelQty = Math.floor(current.cancelQty ?? 0);
         if (cancelQty <= 0 || stockItem.qty < cancelQty) {
           throw new Error(`สต็อกคงเหลือไม่พอสำหรับยกเลิก (คงเหลือ ${stockItem.qty.toLocaleString()} ชิ้น)`);
@@ -1836,35 +1994,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         const dispatch = entitySnapshot.data() as DispatchRecord;
         if (dispatch.status !== 'Pending Receipt') throw new Error('รายการจัดส่งไม่อยู่ในสถานะที่ยกเลิกได้แล้ว');
         if (dispatch.items.some(item => (item.receivedQty ?? 0) > 0)) throw new Error('รายการนี้รับเข้าไปบางส่วนแล้ว กรุณาทำรายการย้ายคืนแทนการยกเลิก');
-        const stockIds = Array.from(new Set(dispatch.items.flatMap((item) => [
-          item.sourceStockItemId || item.stockItemId || item.receiveNo,
-          item.stockReceiveNo,
-        ])));
-        const stockSnapshots = await Promise.all(stockIds.map((stockId) => transaction.get(doc(db, APP_NAME, 'root', 'stockItems', stockId))));
-        const stockById = new Map(stockIds.map((stockId, index) => [stockId, stockSnapshots[index]]));
-        dispatch.items.forEach((item) => {
-          const sourceStockItemId = item.sourceStockItemId || item.stockItemId || item.receiveNo;
-          const sourceSnapshot = stockById.get(sourceStockItemId);
-          const transitSnapshot = stockById.get(item.stockReceiveNo);
-          if (!transitSnapshot?.exists()) throw new Error(`ไม่พบสินค้าระหว่างจัดส่ง ${item.stockReceiveNo}`);
-          const transitItem = normalizeStockItem(transitSnapshot.data(), transitSnapshot.id);
-          const sourceItem = sourceSnapshot?.exists() ? normalizeStockItem(sourceSnapshot.data(), sourceSnapshot.id) : undefined;
-          transaction.set(doc(db, APP_NAME, 'root', 'stockItems', sourceStockItemId), stripUndefined({
-            ...(sourceItem ?? transitItem),
-            stockItemId: sourceStockItemId,
-            receiveNo: sourceItem?.receiveNo || item.receiveNo,
-            qty: (sourceItem?.qty ?? 0) + transitItem.qty,
-            amount: roundAmount((sourceItem?.amount ?? 0) + transitItem.amount),
-            location: sourceItem?.location || item.sourceLocation,
-            purchasedForProject: sourceItem?.purchasedForProject || createProjectLabel(dispatch.sourceProjectNo),
-            cmgProjectCode: sourceItem?.cmgProjectCode || normalizeProjectNoText(dispatch.sourceProjectNo),
-            status: sourceItem?.status === 'In Transit' ? 'Received at Site' : (sourceItem?.status ?? 'Received at Site'),
-            lastCancelledDispatchNo: dispatch.dispatchNo,
-            lastCancelledDispatchAt: approvedAt,
-            lastCancellationReason: current.reason,
-          }), { merge: true });
-          transaction.delete(doc(db, APP_NAME, 'root', 'stockItems', item.stockReceiveNo));
-        });
+        await restoreCancelledDispatchStock(transaction, dispatch, approvedAt, projectBorrowList, current.reason);
         transaction.set(entityRef, {
           status: 'Dispatch Cancelled',
           cancelledAt: approvedAt,
@@ -1892,8 +2022,12 @@ export function InventoryProvider({ children }: PropsWithChildren) {
           const existing = stockSnapshot?.exists() ? normalizeStockItem(stockSnapshot.data(), stockSnapshot.id) : undefined;
           const base = groupedItems[0];
           if (!existing && !base.stockItemSnapshot) throw new Error(`ไม่พบสินค้าเดิม ${base.receiveNo} สำหรับคืนสต็อก`);
-          const qty = groupedItems.reduce((sum, item) => sum + item.qty, 0);
-          const amount = groupedItems.reduce((sum, item) => sum + item.amount, 0);
+          if (existing) {
+            assertStockIdentityMatches(existing, getStockItemMaterialNo(base.stockItemSnapshot ?? base));
+            if (!projectNoMatches(getStockItemProjectNo(existing), withdraw.projectNo)) throw new Error('โครงการของสต็อกเบิกเปลี่ยนแปลง');
+          }
+          const qty = groupedItems.reduce((sum, item) => sum + Math.max(0, item.qty - (item.returnedQty ?? 0)), 0);
+          const amount = groupedItems.reduce((sum, item) => sum + calculatePartialAmount(item.amount, item.qty, Math.max(0, item.qty - (item.returnedQty ?? 0))), 0);
           const restoredStatus = base.originalStatus === 'Borrowed' || base.originalStatus === 'Withdrawn' ? 'Received at Site' : base.originalStatus;
           transaction.set(doc(db, APP_NAME, 'root', 'stockItems', stockId), stripUndefined({
             ...(existing ? {} : base.stockItemSnapshot),
@@ -1922,17 +2056,32 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         const entitySnapshot = await transaction.get(entityRef);
         if (!entitySnapshot.exists()) throw new Error('ไม่พบรายการรับเข้าต้นทาง');
         const receiving = normalizeReceivingRequest(entitySnapshot.data(), current.entityId);
+        assertReceivingCanBeReversed(receiving);
         if (receiving.requestStatus !== 'approved') throw new Error('รายการรับเข้าไม่อยู่ในสถานะที่ยกเลิกได้แล้ว');
-        const stockEntries = receiving.items.map((item, index) => ({
+        const receivingLines = receiving.items.map((item, index) => ({
           item,
           stockItemId: item.stockReceiveNo || receiving.stockReceiveNos?.[index] || '',
-        })).filter(({ stockItemId }) => Boolean(stockItemId));
-        if (!stockEntries.length) throw new Error('รายการรับเข้าไม่มี Stock Receive No. สำหรับย้อนรายการ');
+        }));
+        if (!receivingLines.length || receivingLines.some(line => !line.stockItemId)) throw new Error('รายการรับเข้าไม่มี Stock Receive No. ครบสำหรับย้อนรายการ');
+        const groups = new Map<string, { receivedQty: number; amount: number; materialNo: string }>();
+        receivingLines.forEach(({ item, stockItemId }) => {
+          const materialNo = normalizeMaterialNo(item.materialNo || item.itemNo);
+          const group = groups.get(stockItemId) ?? { receivedQty: 0, amount: 0, materialNo };
+          if (group.materialNo !== materialNo) throw new Error('รายการรับเข้าสินค้าต่างรหัสชี้สต็อกเดียวกัน');
+          group.receivedQty += item.receivedQty;
+          group.amount = roundAmount(group.amount + item.amount);
+          groups.set(stockItemId, group);
+        });
+        const stockEntries = Array.from(groups, ([stockItemId, item]) => ({ stockItemId, item }));
         const stockSnapshots = await Promise.all(stockEntries.map(({ stockItemId }) => transaction.get(doc(db, APP_NAME, 'root', 'stockItems', stockItemId))));
         stockEntries.forEach(({ item, stockItemId }, index) => {
           const stockSnapshot = stockSnapshots[index];
           if (!stockSnapshot.exists()) throw new Error(`ไม่พบสินค้า ${stockItemId} ในสต็อก`);
           const stockItem = normalizeStockItem(stockSnapshot.data(), stockSnapshot.id);
+          assertStockIdentityMatches(stockItem, item.materialNo);
+          if (!projectNoMatches(getStockItemProjectNo(stockItem), receiving.projectNo) || stockItem.projectBorrowRequestNo || stockItem.status === 'In Transit') {
+            throw new Error('สต็อกไม่อยู่ในโครงการหรือสถานะที่ย้อนรับเข้าได้');
+          }
           if (stockItem.qty < item.receivedQty) throw new Error(`สต็อก ${stockItemId} คงเหลือไม่พอสำหรับย้อนรายการ`);
           const remainingQty = stockItem.qty - item.receivedQty;
           const remainingAmount = Math.max(0, roundAmount(stockItem.amount - item.amount));
@@ -1959,30 +2108,9 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         const entitySnapshot = await transaction.get(entityRef);
         if (!entitySnapshot.exists()) throw new Error('ไม่พบรายการยืม-คืนต้นทาง');
         const borrow = normalizeProjectBorrowRequest(entitySnapshot.data(), current.entityId);
-        if (['Rejected', 'Returned', 'Cancelled'].includes(borrow.status)) throw new Error('รายการยืม-คืนไม่อยู่ในสถานะที่ยกเลิกได้แล้ว');
+        if (!['Pending Approval', 'Pending Dispatch', 'Borrowed', 'Return Requested'].includes(borrow.status)) throw new Error('รายการยืม-คืนไม่อยู่ในสถานะที่ยกเลิกได้แล้ว');
         if (borrow.status === 'Borrowed' || borrow.status === 'Return Requested') {
-          const sourceRefs = borrow.items.map((item) => doc(db, APP_NAME, 'root', 'stockItems', item.sourceStockItemId));
-          const borrowedRefs = borrow.items.map((item) => doc(db, APP_NAME, 'root', 'stockItems', item.borrowedStockItemId || `${borrow.requestNo}-BORROW`));
-          const sourceSnapshots = await Promise.all(sourceRefs.map((sourceRef) => transaction.get(sourceRef)));
-          borrow.items.forEach((item, index) => {
-            const sourceSnapshot = sourceSnapshots[index];
-            const sourceItem = sourceSnapshot.exists() ? normalizeStockItem(sourceSnapshot.data(), sourceSnapshot.id) : undefined;
-            transaction.set(sourceRefs[index], stripUndefined({
-              ...(sourceItem ?? {}),
-              stockItemId: item.sourceStockItemId,
-              receiveNo: sourceItem?.receiveNo || item.receiveNo,
-              qty: (sourceItem?.qty ?? 0) + item.qty,
-              amount: roundAmount((sourceItem?.amount ?? 0) + item.amount),
-              status: 'Available',
-              location: sourceItem?.location || item.sourceLocation,
-              purchasedForProject: sourceItem?.purchasedForProject || createProjectLabel(borrow.lenderProjectNo),
-              cmgProjectCode: borrow.lenderProjectNo,
-              lastCancelledProjectBorrowNo: borrow.requestNo,
-              lastCancelledAt: approvedAt,
-              lastCancellationReason: current.reason,
-            }), { merge: true });
-            transaction.delete(borrowedRefs[index]);
-          });
+          await restoreProjectBorrowStock(transaction, borrow, approvedAt, current.reason);
         }
         transaction.set(entityRef, {
           status: 'Cancelled',
@@ -2014,20 +2142,27 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       referenceNo: target.referenceNo,
       reason: target.reason,
     });
-  }, [canApproveCancellation, userProfile, visibleCancellationRequests]);
+  }, [canApproveCancellation, projectBorrowList, userProfile, visibleCancellationRequests]);
 
   const rejectCancellationRequest = useCallback(async (requestId: string, rejectionReason = '') => {
     const target = visibleCancellationRequests.find((request) => request.id === requestId);
     if (!target || target.status !== 'Pending Approval') return;
     if (!canApproveCancellation(target)) throw new Error('เฉพาะผู้มีสิทธิ์ของโครงการที่เกี่ยวข้องเท่านั้นที่ปฏิเสธได้');
     const rejectedAt = new Date().toISOString();
-    await setDoc(doc(db, APP_NAME, 'root', 'cancellationRequests', requestId), {
+    const requestRef = doc(db, APP_NAME, 'root', 'cancellationRequests', requestId);
+    await runTransaction(db, async transaction => {
+      const snapshot = await transaction.get(requestRef);
+      if (!snapshot.exists()) throw new Error('Request no longer exists. Please refresh.');
+      const current = normalizeCancellationRequest(snapshot.data(), snapshot.id);
+      if (current.status !== 'Pending Approval' || !canApproveCancellation(current)) throw new Error('Request status or permissions changed. Please refresh.');
+      transaction.update(requestRef, {
       status: 'Rejected',
       rejectedAt,
       rejectedByUid: userProfile?.uid ?? '',
       rejectedByName: formatPersonName(userProfile?.firstName, userProfile?.lastName, userProfile?.email ?? 'Approver'),
       rejectedReason: rejectionReason.trim(),
-    }, { merge: true });
+    });
+    });
     await logInventoryActivity('CANCEL', userProfile, {
       entityType: target.entityType,
       entityId: target.entityId,
@@ -2037,6 +2172,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
   }, [canApproveCancellation, userProfile, visibleCancellationRequests]);
 
   const createDispatch = useCallback(async ({
+    projectBorrowRequestId,
     sourceProjectNo,
     items: selectedLines,
     projectNo,
@@ -2050,6 +2186,10 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         qty: Number(line.qty),
       }))
       .filter((line) => line.receiveNo && Number.isFinite(line.qty) && line.qty > 0);
+
+    if (normalizedLines.length !== selectedLines.length || normalizedLines.some(line => !Number.isSafeInteger(line.qty))) {
+      throw new Error('จำนวนจัดส่งต้องเป็นจำนวนเต็มมากกว่า 0 ทุกรายการ');
+    }
 
     if (!sourceProjectNo) {
       throw new Error('Please select a source project before dispatching.');
@@ -2092,7 +2232,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         throw new Error(`Item ${sourceItem.receiveNo} is not in the active source project.`);
       }
 
-      if (sourceItem.qty <= 0 || sourceItem.status === 'In Transit') {
+      if (!isStockItemAvailableForMovement(sourceItem)) {
         throw new Error(`Item ${sourceItem.receiveNo} is not available for dispatch.`);
       }
 
@@ -2128,6 +2268,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
 
     const dispatchRef = doc(db, APP_NAME, 'root', 'dispatchRecords', dispatchId);
     await runTransaction(db, async (transaction) => {
+      if ((await transaction.get(dispatchRef)).exists()) throw new Error('เลขที่จัดส่งซ้ำ กรุณาลองใหม่');
       const sourceRefs = selectedItems.map(({ sourceItem }) => (
         doc(db, APP_NAME, 'root', 'stockItems', getStockItemId(sourceItem))
       ));
@@ -2139,10 +2280,11 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         }
 
         const currentSourceItem = normalizeStockItem(sourceSnapshot.data(), sourceSnapshot.id);
+        assertStockIdentityMatches(currentSourceItem, getStockItemMaterialNo(selectedItems[index].sourceItem));
         if (getStockItemProjectNo(currentSourceItem) !== normalizedSourceProjectNo) {
           throw new Error(`Item ${currentSourceItem.receiveNo} is not in the active source project.`);
         }
-        if (currentSourceItem.qty <= 0 || currentSourceItem.status === 'In Transit') {
+        if (!isStockItemAvailableForMovement(currentSourceItem)) {
           throw new Error(`Item ${currentSourceItem.receiveNo} is not available for dispatch.`);
         }
         if (line.qty > currentSourceItem.qty) {
@@ -2172,28 +2314,30 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         };
       });
 
-      const borrowCandidates = projectBorrowList.filter((request) =>
-        request.status === 'Pending Dispatch' &&
-        projectNoMatches(request.lenderProjectNo, sourceProject.projectNo) &&
-        projectNoMatches(request.borrowerProjectNo, targetProject.projectNo)
-      );
-      const borrowRefs = borrowCandidates.map((request) =>
-        doc(db, APP_NAME, 'root', 'projectBorrowRequests', request.id)
-      );
-      const borrowSnapshots = await Promise.all(borrowRefs.map((borrowRef) => transaction.get(borrowRef)));
-      const dispatchBySourceId = new Map(
-        dispatchSnapshots.map((snapshot) => [snapshot.sourceStockItemId, snapshot])
-      );
-      const linkedBorrowRequests = borrowCandidates
-        .map((request, index) => ({ request, ref: borrowRefs[index], snapshot: borrowSnapshots[index] }))
-        .filter(({ request, snapshot }) => {
-          if (!snapshot.exists()) return false;
-          const current = normalizeProjectBorrowRequest(snapshot.data(), request.id);
-          return current.status === 'Pending Dispatch' && current.items.every((item) => {
-            const dispatched = dispatchBySourceId.get(item.sourceStockItemId);
-            return Boolean(dispatched && dispatched.sourceItem.status === 'Available' && dispatched.qty >= item.qty);
-          });
-        });
+      const dispatchBySourceId = new Map(dispatchSnapshots.map(snapshot => [snapshot.sourceStockItemId, snapshot]));
+      const linkedBorrowRequests: Array<{ request: ProjectBorrowRequest; ref: ReturnType<typeof doc> }> = [];
+      if (projectBorrowRequestId) {
+        const borrowRef = doc(db, APP_NAME, 'root', 'projectBorrowRequests', projectBorrowRequestId);
+        const borrowSnapshot = await transaction.get(borrowRef);
+        if (!borrowSnapshot.exists()) throw new Error('Borrow request no longer exists. Please refresh.');
+        const request = normalizeProjectBorrowRequest(borrowSnapshot.data(), borrowSnapshot.id);
+        if (request.status !== 'Pending Dispatch' ||
+            !projectNoMatches(request.lenderProjectNo, sourceProject.projectNo) ||
+            !projectNoMatches(request.borrowerProjectNo, targetProject.projectNo) ||
+            !request.items.length || request.items.length !== dispatchSnapshots.length ||
+            new Set(request.items.map(item => item.sourceStockItemId)).size !== request.items.length ||
+            request.items.some(item => {
+              const dispatched = dispatchBySourceId.get(item.sourceStockItemId);
+              return !dispatched || dispatched.qty !== item.qty ||
+                normalizeMaterialNo(item.materialNo || item.itemNo) !== dispatched.materialNo;
+            })) {
+          throw new Error('Borrow request changed or dispatch quantities do not match. Please refresh.');
+        }
+        linkedBorrowRequests.push({ request, ref: borrowRef });
+      }
+      const transitRefs = dispatchSnapshots.map(item => doc(db, APP_NAME, 'root', 'stockItems', item.stockReceiveNo));
+      const transitSnapshots = await Promise.all(transitRefs.map(stockRef => transaction.get(stockRef)));
+      if (transitSnapshots.some(snapshot => snapshot.exists())) throw new Error('Transit document already exists. Please retry.');
       const linkedBorrowItemBySourceId = new Map(
         linkedBorrowRequests.flatMap(({ request }) => request.items.map((item) => [item.sourceStockItemId, request] as const))
       );
@@ -2245,6 +2389,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       });
 
       const record: DispatchRecord = {
+        projectBorrowRequestId,
         id: dispatchId,
         dispatchNo,
         sourceProjectNo: sourceProject.projectNo,
@@ -2272,7 +2417,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       totalQty: selectedItems.reduce((sum, { line }) => sum + line.qty, 0),
       itemCount: selectedItems.length,
     });
-  }, [items, projectBorrowList, projectList, userProfile]);
+  }, [items, projectList, userProfile]);
 
   const cancelDispatch = useCallback(async (dispatchId: string) => {
     const target = dispatchList.find((record) => record.id === dispatchId);
@@ -2303,49 +2448,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         throw new Error('รายการนี้รับเข้าไปบางส่วนแล้ว กรุณาทำรายการย้ายคืนแทนการยกเลิก');
       }
 
-      const stockIds = Array.from(new Set(target.items.flatMap((item) => [
-        item.sourceStockItemId || item.stockItemId || item.receiveNo,
-        item.stockReceiveNo,
-      ])));
-      const stockSnapshots = await Promise.all(
-        stockIds.map((stockItemId) => transaction.get(doc(db, APP_NAME, 'root', 'stockItems', stockItemId)))
-      );
-      const stockSnapshotById = new Map(stockIds.map((stockItemId, index) => [stockItemId, stockSnapshots[index]]));
-
-      target.items.forEach((item) => {
-        const sourceStockItemId = item.sourceStockItemId || item.stockItemId || item.receiveNo;
-        const sourceSnapshot = stockSnapshotById.get(sourceStockItemId);
-        const transitSnapshot = stockSnapshotById.get(item.stockReceiveNo);
-
-        if (!transitSnapshot?.exists()) {
-          throw new Error(`In-transit item ${item.stockReceiveNo} could not be found.`);
-        }
-
-        const transitItem = normalizeStockItem(transitSnapshot.data(), transitSnapshot.id);
-        const sourceItem = sourceSnapshot?.exists()
-          ? normalizeStockItem(sourceSnapshot.data(), sourceSnapshot.id)
-          : undefined;
-        const sourceRef = doc(db, APP_NAME, 'root', 'stockItems', sourceStockItemId);
-
-        transaction.set(
-          sourceRef,
-          stripUndefined({
-            ...(sourceItem ?? transitItem),
-            stockItemId: sourceStockItemId,
-            receiveNo: sourceItem?.receiveNo || item.receiveNo,
-            qty: (sourceItem?.qty ?? 0) + transitItem.qty,
-            amount: roundAmount((sourceItem?.amount ?? 0) + transitItem.amount),
-            location: sourceItem?.location || item.sourceLocation,
-            purchasedForProject: sourceItem?.purchasedForProject || createProjectLabel(target.sourceProjectNo),
-            cmgProjectCode: sourceItem?.cmgProjectCode || normalizeProjectNoText(target.sourceProjectNo),
-            status: sourceItem?.status === 'In Transit' ? 'Received at Site' : (sourceItem?.status ?? 'Received at Site'),
-            lastCancelledDispatchNo: target.dispatchNo,
-            lastCancelledDispatchAt: cancelledAt,
-          }),
-          { merge: true }
-        );
-        transaction.delete(doc(db, APP_NAME, 'root', 'stockItems', item.stockReceiveNo));
-      });
+      await restoreCancelledDispatchStock(transaction, currentDispatch, cancelledAt, projectBorrowList);
 
       transaction.set(
         dispatchRef,
@@ -2366,7 +2469,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       destinationProjectNo: target.destinationProjectNo,
       reason: 'dispatch_cancelled',
     });
-  }, [dispatchList, userProfile]);
+  }, [dispatchList, projectBorrowList, userProfile]);
 
   const createWithdraw = useCallback(async ({
     projectNo,
@@ -2386,6 +2489,10 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         requesterName: normalizeText(line.requesterName),
       }))
       .filter((line) => line.receiveNo && Number.isFinite(line.qty) && line.qty > 0);
+
+    if (normalizedLines.length !== selectedLines.length || normalizedLines.some(line => !Number.isSafeInteger(line.qty))) {
+      throw new Error('Withdrawal quantities must be positive whole numbers for every line.');
+    }
 
     if (!normalizedProjectNo) {
       throw new Error('Please select an active project before creating a withdrawal.');
@@ -2432,10 +2539,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       }
 
       if (
-        sourceItem.qty <= 0 ||
-        sourceItem.status === 'In Transit' ||
-        sourceItem.status === 'Borrowed' ||
-        sourceItem.status === 'Withdrawn'
+        !isStockItemAvailableForMovement(sourceItem)
       ) {
         throw new Error(`Item ${sourceItem.receiveNo} is not available for withdrawal.`);
       }
@@ -2473,6 +2577,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
 
     const withdrawRef = doc(db, APP_NAME, 'root', 'withdrawRecords', withdrawId);
     await runTransaction(db, async (transaction) => {
+      if ((await transaction.get(withdrawRef)).exists()) throw new Error('Withdrawal number already exists. Please retry.');
       const sourceRefs = selectedItems.map(({ sourceItem }) => (
         doc(db, APP_NAME, 'root', 'stockItems', getStockItemId(sourceItem))
       ));
@@ -2488,10 +2593,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
           throw new Error(`Item ${sourceItem.receiveNo} is not in the active project store.`);
         }
         if (
-          sourceItem.qty <= 0 ||
-          sourceItem.status === 'In Transit' ||
-          sourceItem.status === 'Borrowed' ||
-          sourceItem.status === 'Withdrawn'
+          !isStockItemAvailableForMovement(sourceItem)
         ) {
           throw new Error(`Item ${sourceItem.receiveNo} is not available for withdrawal.`);
         }
@@ -2585,25 +2687,6 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     const returnedByEmail = userProfile?.email ?? 'unknown@cmg.local';
     const returnedByUid = userProfile?.uid ?? '';
     const withdrawRef = doc(db, APP_NAME, 'root', 'withdrawRecords', target.id);
-    const restorations = target.items.map((item) => {
-      const exactItem = items.find((stockItem) => (
-        getStockItemId(stockItem) === item.stockItemId &&
-        getStockItemProjectNo(stockItem) === normalizeProjectNoText(target.projectNo)
-      ));
-      const materialNo = getStockItemMaterialNo(item.stockItemSnapshot ?? {
-        materialNo: undefined,
-        itemNo: item.itemNo,
-      });
-      const identityItem = exactItem ?? findStockItemByIdentity(items, target.projectNo, materialNo);
-      return {
-        item,
-        stockItemId:
-          (identityItem ? getStockItemId(identityItem) : '') ||
-          createStockIdentityDocumentId(normalizeProjectNoText(target.projectNo), materialNo) ||
-          item.stockItemId,
-      };
-    });
-
     await runTransaction(db, async (transaction) => {
       const withdrawSnapshot = await transaction.get(withdrawRef);
       if (!withdrawSnapshot.exists()) {
@@ -2614,6 +2697,26 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       if (normalizeWithdrawType(withdrawData.type) !== 'borrow' || currentStatus === 'Returned' || currentStatus === 'Cancelled') {
         return;
       }
+
+      const current = normalizeWithdrawRecord(withdrawSnapshot.data(), withdrawSnapshot.id);
+      const restorations = current.items.map((item) => {
+        const exactItem = items.find((stockItem) => (
+          getStockItemId(stockItem) === item.stockItemId &&
+          getStockItemProjectNo(stockItem) === normalizeProjectNoText(current.projectNo)
+        ));
+        const materialNo = getStockItemMaterialNo(item.stockItemSnapshot ?? {
+          materialNo: undefined,
+          itemNo: item.itemNo,
+        });
+        const identityItem = exactItem ?? findStockItemByIdentity(items, current.projectNo, materialNo);
+        return {
+          item,
+          stockItemId:
+            (identityItem ? getStockItemId(identityItem) : '') ||
+            createStockIdentityDocumentId(normalizeProjectNoText(current.projectNo), materialNo) ||
+            item.stockItemId,
+        };
+      });
 
       const restorationGroups = restorations.reduce((acc, restoration) => {
         const grouped = acc.get(restoration.stockItemId) ?? [];
@@ -2634,13 +2737,17 @@ export function InventoryProvider({ children }: PropsWithChildren) {
           ? normalizeStockItem(stockSnapshot.data(), stockSnapshot.id)
           : undefined;
         const baseItem = groupedItems[0];
+        if (existingStockItem) {
+          assertStockIdentityMatches(existingStockItem, getStockItemMaterialNo(baseItem.stockItemSnapshot ?? baseItem));
+          if (!projectNoMatches(getStockItemProjectNo(existingStockItem), current.projectNo)) throw new Error('Stock project changed. Please refresh.');
+        }
         const snapshot = baseItem.stockItemSnapshot;
         if (!existingStockItem && !snapshot) {
           throw new Error(`Original stock item ${baseItem.receiveNo} could not be restored. Please contact admin.`);
         }
 
-        const qtyToRestore = groupedItems.reduce((sum, item) => sum + item.qty, 0);
-        const amountToRestore = groupedItems.reduce((sum, item) => sum + item.amount, 0);
+        const qtyToRestore = groupedItems.reduce((sum, item) => sum + Math.max(0, item.qty - (item.returnedQty ?? 0)), 0);
+        const amountToRestore = groupedItems.reduce((sum, item) => sum + calculatePartialAmount(item.amount, item.qty, Math.max(0, item.qty - (item.returnedQty ?? 0))), 0);
         const restoredStatus =
           baseItem.originalStatus === 'Borrowed' || baseItem.originalStatus === 'Withdrawn'
             ? 'Received at Site'
@@ -2679,7 +2786,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
           returnedByUid,
           returnedByName,
           returnedByEmail,
-          items: target.items.map((item) => ({ ...item, returnedQty: item.qty })),
+          items: current.items.map((item) => ({ ...item, returnedQty: item.qty })),
         }),
         { merge: true }
       );
@@ -2711,25 +2818,6 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     const cancelledByEmail = userProfile?.email ?? 'unknown@cmg.local';
     const cancelledByUid = userProfile?.uid ?? '';
     const withdrawRef = doc(db, APP_NAME, 'root', 'withdrawRecords', target.id);
-    const restorations = target.items.map((item) => {
-      const exactItem = items.find((stockItem) => (
-        getStockItemId(stockItem) === item.stockItemId &&
-        getStockItemProjectNo(stockItem) === normalizeProjectNoText(target.projectNo)
-      ));
-      const materialNo = getStockItemMaterialNo(item.stockItemSnapshot ?? {
-        materialNo: undefined,
-        itemNo: item.itemNo,
-      });
-      const identityItem = exactItem ?? findStockItemByIdentity(items, target.projectNo, materialNo);
-      return {
-        item,
-        stockItemId:
-          (identityItem ? getStockItemId(identityItem) : '') ||
-          createStockIdentityDocumentId(normalizeProjectNoText(target.projectNo), materialNo) ||
-          item.stockItemId,
-      };
-    });
-
     await runTransaction(db, async (transaction) => {
       const withdrawSnapshot = await transaction.get(withdrawRef);
       if (!withdrawSnapshot.exists()) {
@@ -2739,6 +2827,26 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       if (currentStatus === 'Returned' || currentStatus === 'Cancelled') {
         return;
       }
+
+      const current = normalizeWithdrawRecord(withdrawSnapshot.data(), withdrawSnapshot.id);
+      const restorations = current.items.map((item) => {
+        const exactItem = items.find((stockItem) => (
+          getStockItemId(stockItem) === item.stockItemId &&
+          getStockItemProjectNo(stockItem) === normalizeProjectNoText(current.projectNo)
+        ));
+        const materialNo = getStockItemMaterialNo(item.stockItemSnapshot ?? {
+          materialNo: undefined,
+          itemNo: item.itemNo,
+        });
+        const identityItem = exactItem ?? findStockItemByIdentity(items, current.projectNo, materialNo);
+        return {
+          item,
+          stockItemId:
+            (identityItem ? getStockItemId(identityItem) : '') ||
+            createStockIdentityDocumentId(normalizeProjectNoText(current.projectNo), materialNo) ||
+            item.stockItemId,
+        };
+      });
 
       const restorationGroups = restorations.reduce((acc, restoration) => {
         const grouped = acc.get(restoration.stockItemId) ?? [];
@@ -2759,13 +2867,17 @@ export function InventoryProvider({ children }: PropsWithChildren) {
           ? normalizeStockItem(stockSnapshot.data(), stockSnapshot.id)
           : undefined;
         const baseItem = groupedItems[0];
+        if (existingStockItem) {
+          assertStockIdentityMatches(existingStockItem, getStockItemMaterialNo(baseItem.stockItemSnapshot ?? baseItem));
+          if (!projectNoMatches(getStockItemProjectNo(existingStockItem), current.projectNo)) throw new Error('Stock project changed. Please refresh.');
+        }
         const snapshot = baseItem.stockItemSnapshot;
         if (!existingStockItem && !snapshot) {
           throw new Error(`Original stock item ${baseItem.receiveNo} could not be restored. Please contact admin.`);
         }
 
-        const qtyToRestore = groupedItems.reduce((sum, item) => sum + item.qty, 0);
-        const amountToRestore = groupedItems.reduce((sum, item) => sum + item.amount, 0);
+        const qtyToRestore = groupedItems.reduce((sum, item) => sum + Math.max(0, item.qty - (item.returnedQty ?? 0)), 0);
+        const amountToRestore = groupedItems.reduce((sum, item) => sum + calculatePartialAmount(item.amount, item.qty, Math.max(0, item.qty - (item.returnedQty ?? 0))), 0);
         const restoredStatus =
           baseItem.originalStatus === 'Borrowed' || baseItem.originalStatus === 'Withdrawn'
             ? 'Received at Site'
@@ -2840,7 +2952,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     const plans = target.items.map((item) => {
       const transitStockItem = items.find((stockItem) => getStockItemId(stockItem) === item.stockReceiveNo);
       const materialNo = normalizeMaterialNo(item.materialNo || transitStockItem?.materialNo || item.itemNo);
-      const isProjectBorrowTransit = Boolean(transitStockItem?.projectBorrowRequestNo);
+      const isProjectBorrowTransit = Boolean(target.projectBorrowRequestId || transitStockItem?.projectBorrowRequestNo);
       const existingDestinationItem = findStockItemByIdentity(
         items,
         destinationProjectNo,
@@ -2868,7 +2980,8 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       }
       const currentDispatch = dispatchSnapshot.data() as DispatchRecord;
       // A concurrent receipt must not reuse quantities from a stale receive dialog.
-      if (JSON.stringify(currentDispatch.items) !== JSON.stringify(target.items)) {
+      if (JSON.stringify([currentDispatch.items, currentDispatch.sourceProjectNo, currentDispatch.destinationProjectNo, currentDispatch.projectBorrowRequestId]) !==
+          JSON.stringify([target.items, target.sourceProjectNo, target.destinationProjectNo, target.projectBorrowRequestId])) {
         throw new Error('รายการรับเข้ามีการเปลี่ยนแปลง กรุณารีเฟรชแล้วลองใหม่');
       }
       if (!plans.some(plan => getDispatchReceiptBalance(plan.item.qty, plan.item.receivedQty ?? 0,
@@ -2887,13 +3000,25 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       const stockSnapshotById = new Map(
         allStockIds.map((stockItemId, index) => [stockItemId, allStockSnapshots[index]])
       );
-      const borrowCandidates = projectBorrowList.filter((request) =>
-        request.status === 'In Transit' && request.dispatchNo === target.dispatchNo
-      );
-      const borrowRefs = borrowCandidates.map((request) =>
-        doc(db, APP_NAME, 'root', 'projectBorrowRequests', request.id)
-      );
+      const borrowIds = currentDispatch.projectBorrowRequestId ? [currentDispatch.projectBorrowRequestId] :
+        projectBorrowList.filter(request => request.dispatchNo === currentDispatch.dispatchNo).map(request => request.id);
+      const borrowRefs = borrowIds.map(id => doc(db, APP_NAME, 'root', 'projectBorrowRequests', id));
       const borrowSnapshots = await Promise.all(borrowRefs.map((borrowRef) => transaction.get(borrowRef)));
+      const linkedReceiveRequests = borrowSnapshots.map((snapshot, index) => {
+        if (!snapshot.exists()) throw new Error('ไม่พบคำขอยืมที่ผูกกับใบจัดส่งนี้');
+        const request = normalizeProjectBorrowRequest(snapshot.data(), snapshot.id);
+        if (request.status !== 'In Transit' || request.dispatchNo !== currentDispatch.dispatchNo ||
+            !projectNoMatches(request.borrowerProjectNo, currentDispatch.destinationProjectNo)) {
+          throw new Error('สถานะคำขอยืมเปลี่ยนไป กรุณารีเฟรชแล้วลองใหม่');
+        }
+        return { request, ref: borrowRefs[index] };
+      });
+      const borrowedTransitIds = linkedReceiveRequests.flatMap(({ request }) => request.items.map(item => item.dispatchStockItemId));
+      if (new Set(borrowedTransitIds).size !== borrowedTransitIds.length || linkedReceiveRequests.some(({ request }) =>
+        request.items.some(item => !item.dispatchStockItemId ||
+          currentDispatch.items.find(line => line.stockReceiveNo === item.dispatchStockItemId)?.qty !== item.qty))) {
+        throw new Error('คำขอยืมหลายรายการใช้ยอดจัดส่งเดียวกัน กรุณาตรวจสอบก่อนรับเข้า');
+      }
       const destinationGroups = new Map<string, Array<{
         plan: typeof plans[number];
         transitStockItem: StockItem;
@@ -2915,6 +3040,8 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         }
 
         const transitStockItem = normalizeStockItem(transitSnapshot.data(), transitSnapshot.id);
+        assertStockIdentityMatches(transitStockItem, plan.materialNo);
+        if (!projectNoMatches(getStockItemProjectNo(transitStockItem), destinationProjectNo)) throw new Error('โครงการของสินค้าระหว่างจัดส่งไม่ตรงกับปลายทาง');
         if (transitStockItem.status !== 'In Transit' || transitStockItem.qty !== plan.item.qty - (plan.item.receivedQty ?? 0)) {
           throw new Error('ยอดระหว่างขนส่งไม่ตรงกับยอดรอรับ กรุณาตรวจสอบก่อนรับเข้า');
         }
@@ -2953,26 +3080,18 @@ export function InventoryProvider({ children }: PropsWithChildren) {
           stockReceiveNo: item.destinationStockItemId,
         }));
 
-      const receivedBySourceId = new Map(
-        receivedSnapshots.map((item) => [item.sourceStockItemId, item])
+      const receivedByTransitId = new Map(
+        receivedSnapshots.map((item) => [item.stockReceiveNo, item])
       );
-      const linkedReceiveRequests = borrowCandidates
-        .map((request, index) => ({ request, ref: borrowRefs[index], snapshot: borrowSnapshots[index] }))
-        .filter(({ snapshot }) => snapshot.exists())
-        .map(({ request, ref, snapshot }) => ({
-          request: normalizeProjectBorrowRequest(snapshot?.data() as DocumentData, request.id),
-          ref,
-        }))
-        .filter(({ request }) => request.status === 'In Transit');
       const borrowDestinationIds = new Set(
         linkedReceiveRequests.flatMap(({ request }) => request.items
-          .map((item) => receivedBySourceId.get(item.sourceStockItemId)?.destinationStockItemId)
+          .map((item) => receivedByTransitId.get(item.dispatchStockItemId!)?.destinationStockItemId)
           .filter((stockItemId): stockItemId is string => Boolean(stockItemId)))
       );
 
       linkedReceiveRequests.forEach(({ request, ref }) => {
         const nextItems = request.items.map((item) => {
-          const received = receivedBySourceId.get(item.sourceStockItemId);
+          const received = receivedByTransitId.get(item.dispatchStockItemId!);
           return {
             ...item,
             borrowedStockItemId: received?.destinationStockItemId || item.borrowedStockItemId,
@@ -2998,6 +3117,9 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         const base = groupedPlans[0];
         if (existingDestinationItem) {
           assertStockIdentityMatches(existingDestinationItem, base.plan.materialNo);
+          if (existingDestinationItem.qty > 0 && ['Repair', 'Pending Repair'].includes(existingDestinationItem.status)) {
+            throw new Error('สต็อกปลายทางอยู่ระหว่างซ่อม ไม่สามารถรวมยอดเป็นพร้อมใช้งานได้');
+          }
         }
         const qtyToAdd = groupedPlans.reduce((sum, entry) => sum + entry.receivedQty, 0);
         const amountToAdd = groupedPlans.reduce((sum, entry) => sum + entry.receivedAmount, 0);
@@ -3216,6 +3338,11 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       if (normalizeReceivingRequestStatus(requestData.requestStatus ?? requestData.status) !== 'pending') {
         return;
       }
+      const current = normalizeReceivingRequest(requestData, requestSnapshot.id);
+      if (JSON.stringify([current.items, current.projectNo, current.cmgProjectCode, current.location, current.poNo, current.prNo]) !==
+          JSON.stringify([target.items, target.projectNo, target.cmgProjectCode, target.location, target.poNo, target.prNo])) {
+        throw new Error('รายการรับเข้าเปลี่ยนแปลง กรุณารีเฟรชแล้วลองใหม่');
+      }
 
       const stockEntries = Array.from(assignmentsByStockId.entries());
       const stockSnapshots = await Promise.all(
@@ -3230,6 +3357,14 @@ export function InventoryProvider({ children }: PropsWithChildren) {
           ? normalizeStockItem(stockSnapshot.data(), stockSnapshot.id)
           : undefined;
         const firstItem = groupedAssignments[0].item;
+        if (existingStockItem) {
+          assertStockIdentityMatches(existingStockItem, groupedAssignments[0].materialNo);
+          if (!projectNoMatches(getStockItemProjectNo(existingStockItem), cmgProjectCode) ||
+              existingStockItem.projectBorrowRequestNo || existingStockItem.status === 'In Transit' ||
+              (existingStockItem.qty > 0 && ['Repair', 'Pending Repair'].includes(existingStockItem.status))) {
+            throw new Error('สต็อกปลายทางเปลี่ยนโครงการหรืออยู่ระหว่างยืม/จัดส่ง กรุณาตรวจสอบ');
+          }
+        }
         const qtyToAdd = groupedAssignments.reduce((sum, assignment) => sum + assignment.item.receivedQty, 0);
         const amountToAdd = groupedAssignments.reduce((sum, assignment) => sum + assignment.item.amount, 0);
         const stockRef = doc(db, APP_NAME, 'root', 'stockItems', stockItemId);
@@ -3279,7 +3414,9 @@ export function InventoryProvider({ children }: PropsWithChildren) {
           ? rawItem as DocumentData
           : ({} as DocumentData);
         const normalizedRawItem = normalizeReceivingRequestItem(rawItemData, rawItemIndex);
-        if (normalizedRawItem.receivedQty <= 0) {
+        const remainingQty = rawItemData.stockRequestedQty === undefined ? normalizedRawItem.receivedQty :
+          normalizeNumber(rawItemData.stockRequestedQty) - normalizedRawItem.receivedQty;
+        if (remainingQty <= 0) {
           return rawItemData;
         }
 
@@ -3288,26 +3425,28 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         const assignment = assignments.find((entry) => entry.index === receivingItem?.index);
         return {
           ...rawItemData,
-          receivedQty: receivingItem?.receivedQty ?? 0,
-          amount: receivingItem?.amount ?? 0,
+          stockRequestedQty: rawItemData.stockRequestedQty ?? normalizedRawItem.receivedQty,
+          stockRequestedAmount: rawItemData.stockRequestedAmount ?? normalizedRawItem.amount,
+          receivedQty: (rawItemData.stockRequestedQty === undefined ? 0 : normalizedRawItem.receivedQty) + (receivingItem?.receivedQty ?? 0),
+          amount: roundAmount((rawItemData.stockRequestedQty === undefined ? 0 : normalizedRawItem.amount) + (receivingItem?.amount ?? 0)),
           itemType: receivingItem?.itemType,
           itemTypeGroup: receivingItem?.itemTypeGroup,
-          stockReceiveNo: assignment?.stockItemId,
+          stockReceiveNo: assignment?.stockItemId || normalizedRawItem.stockReceiveNo || undefined,
         };
       });
 
       transaction.set(
         requestRef,
         stripUndefined({
-          requestStatus: 'approved',
+          requestStatus: updatedItems.some(item => normalizeNumber(item.stockRequestedQty) > normalizeNumber(item.receivedQty)) ? 'pending' : 'approved',
           approvedAt,
           approvedByUid,
           approvedByName,
           approvedByEmail,
           items: updatedItems,
-          stockReceiveNos: assignments.map((assignment) => assignment.stockItemId),
-          totalQty: receivingItems.reduce<number>((sum, entry) => sum + entry.receivedQty, 0),
-          totalAmount: roundAmount(receivingItems.reduce<number>((sum, entry) => sum + entry.amount, 0)),
+          stockReceiveNos: updatedItems.filter(item => normalizeNumber(item.receivedQty) > 0).map(item => item.stockReceiveNo).filter(Boolean),
+          totalQty: updatedItems.reduce<number>((sum, item) => sum + normalizeNumber(item.receivedQty), 0),
+          totalAmount: roundAmount(updatedItems.reduce<number>((sum, item) => sum + normalizeNumber(item.amount), 0)),
         }),
         { merge: true }
       );
@@ -3363,15 +3502,19 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     const stockItemId = getStockItemId(item);
     const docRef = doc(db, APP_NAME, 'root', 'stockItems', stockItemId);
     const receiver = createReceivedBySnapshot(userProfile, 'Store Receiver');
-    await setDoc(docRef, stripUndefined({
-      ...item,
-      stockItemId,
-      receiveName: item.receiveName || receiver.receivedByName,
-      receivedByUid: item.receivedByUid || receiver.receivedByUid,
-      receivedByName: item.receivedByName || receiver.receivedByName,
-      receivedByEmail: item.receivedByEmail || receiver.receivedByEmail,
-      lastReceivedAt: item.lastReceivedAt || item.receiveDate || new Date().toISOString(),
-    }));
+    if (!Number.isSafeInteger(item.qty) || item.qty <= 0) throw new Error('จำนวนรับเข้าต้องเป็นจำนวนเต็มมากกว่า 0');
+    await runTransaction(db, async transaction => {
+      if ((await transaction.get(docRef)).exists()) throw new Error('รหัสเอกสารสต็อกนี้มีอยู่แล้ว ไม่สามารถรับเข้าทับยอดเดิมได้');
+      transaction.set(docRef, stripUndefined({
+        ...item,
+        stockItemId,
+        receiveName: item.receiveName || receiver.receivedByName,
+        receivedByUid: item.receivedByUid || receiver.receivedByUid,
+        receivedByName: item.receivedByName || receiver.receivedByName,
+        receivedByEmail: item.receivedByEmail || receiver.receivedByEmail,
+        lastReceivedAt: item.lastReceivedAt || item.receiveDate || new Date().toISOString(),
+      }));
+    });
     await logInventoryActivity('ADD_ITEM', userProfile, {
       stockItemId,
       receiveNo: item.receiveNo,
@@ -3465,6 +3608,10 @@ export function InventoryProvider({ children }: PropsWithChildren) {
           : undefined;
         if (existing) {
           assertStockIdentityMatches(existing, item.itemNo);
+          if (!projectNoMatches(getStockItemProjectNo(existing), normalizedProjectNo) || existing.projectBorrowRequestNo ||
+              ['In Transit', 'Repair', 'Pending Repair'].includes(existing.status)) {
+            throw new Error('สต็อกเดิมอยู่ระหว่างยืม/จัดส่ง/ซ่อม ไม่สามารถรวมยอดนำเข้าได้');
+          }
         }
         transaction.set(doc(db, APP_NAME, 'root', 'stockItems', stockItemId), stripUndefined({
           stockItemId,
@@ -3697,6 +3844,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     if (!target || target.requestStatus !== 'approved' || !target.items.length) {
       throw new Error('ไม่พบรายการรับเข้าที่ต้องการลบ กรุณารีเฟรชแล้วลองใหม่');
     }
+    assertReceivingCanBeReversed(target);
 
     const requestRef = doc(db, APP_NAME, 'root', 'receivingRequests', requestId);
     const deleteLogRef = doc(collection(db, APP_NAME, 'root', 'logdeletes'));
@@ -3714,6 +3862,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       if (normalizeReceivingRequestStatus(requestData.requestStatus ?? requestData.status) !== 'approved') {
         throw new Error('ลบได้เฉพาะรายการรับเข้าที่อนุมัติแล้ว');
       }
+      assertReceivingCanBeReversed(normalizeReceivingRequest(requestData, requestSnapshot.id));
 
       const rawItems = parseReceivingItems(requestData.items);
       const requestStockReceiveNos = normalizeStringArray(requestData.stockReceiveNos);
@@ -3737,12 +3886,14 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       }
 
       const deductions = receivingItems.reduce((groups, { item, stockItemId }) => {
-        const current = groups.get(stockItemId) ?? { qty: 0, amount: 0 };
+        const materialNo = normalizeMaterialNo(item.materialNo || item.itemNo);
+        const current = groups.get(stockItemId) ?? { qty: 0, amount: 0, materialNo };
+        if (current.materialNo !== materialNo) throw new Error('รายการรับเข้าสินค้าต่างรหัสชี้สต็อกเดียวกัน');
         current.qty += item.receivedQty;
         current.amount = roundAmount(current.amount + item.amount);
         groups.set(stockItemId, current);
         return groups;
-      }, new Map<string, { qty: number; amount: number }>());
+      }, new Map<string, { qty: number; amount: number; materialNo: string }>());
       const stockEntries = Array.from(deductions.entries());
       const stockRefs = stockEntries.map(([stockItemId]) => (
         doc(db, APP_NAME, 'root', 'stockItems', stockItemId)
@@ -3756,6 +3907,11 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         }
 
         const stockItem = normalizeStockItem(stockSnapshot.data(), stockSnapshot.id);
+        assertStockIdentityMatches(stockItem, deduction.materialNo);
+        const currentRequest = normalizeReceivingRequest(requestData, requestSnapshot.id);
+        if (!projectNoMatches(getStockItemProjectNo(stockItem), currentRequest.projectNo) || stockItem.projectBorrowRequestNo || stockItem.status === 'In Transit') {
+          throw new Error('สต็อกไม่อยู่ในโครงการหรือสถานะที่ย้อนรับเข้าได้');
+        }
         if (stockItem.qty < deduction.qty) {
           throw new Error(
             `ไม่สามารถลบได้ เนื่องจาก ${stockItemId} คงเหลือ ${stockItem.qty.toLocaleString()} ชิ้น แต่ Request นี้รับเข้า ${deduction.qty.toLocaleString()} ชิ้น`
