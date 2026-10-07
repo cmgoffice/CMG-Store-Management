@@ -7,6 +7,7 @@ import { StatusBadge } from '../components/StatusBadge';
 import { getItemTypeOption, matchesItemType } from '../constants/itemTypes';
 import { useInventory } from '../context/InventoryContext';
 import type { StockItem, StockStatus } from '../types/models';
+import { isStockItemReadyForUse } from '../utils/stockItem';
 import '../styles/tables.css';
 import styles from './StockListPage.module.css';
 
@@ -46,6 +47,7 @@ type AggregatedInventoryItem = {
   searchText: string;
   projectQty: InventoryProjectQty[];
   qtyByProject: Record<string, number>;
+  transitQtyByProject: Record<string, number>;
   history: InventoryReceiveHistory[];
 };
 
@@ -381,7 +383,7 @@ export function StockListPage({
           projectQty.map((entry) => entry.projectNo).join(', ') || '-';
         const repairItems = group.repairItems;
         const stockAvailableQty = group.items
-          .filter((stockItem) => stockItem.status !== 'Repair' && stockItem.status !== 'Pending Repair')
+          .filter(isStockItemReadyForUse)
           .reduce((total, stockItem) => total + stockItem.qty, 0);
         const availableQty = Math.max(0, stockAvailableQty);
         const repairQty = repairItems
@@ -501,6 +503,12 @@ export function StockListPage({
           searchText,
           projectQty,
           qtyByProject,
+          transitQtyByProject: group.items.filter(stockItem => stockItem.status === 'In Transit')
+            .reduce<Record<string, number>>((totals, stockItem) => {
+              const project = getStockItemProjectNo(stockItem);
+              totals[project] = (totals[project] ?? 0) + stockItem.qty;
+              return totals;
+            }, {}),
           history,
         };
       })
@@ -614,13 +622,20 @@ export function StockListPage({
                     </td>
                     {projectQtyColumns.map((project) => {
                       const projectQty = item.qtyByProject[project.projectNo] ?? 0;
+                      const transitQty = item.transitQtyByProject[project.projectNo] ?? 0;
+                      const receivedQty = projectQty - transitQty;
 
                       return (
                         <td
                           key={project.projectNo}
                           className={`numeric ${styles.projectQtyCell} ${projectQty === 0 ? 'muted' : ''}`}
                         >
-                          {projectQty === 0 ? '-' : projectQty.toLocaleString()}
+                          {projectQty === 0 ? '-' : receivedQty.toLocaleString()}
+                          {transitQty > 0 && (
+                            <small className={styles.pendingReceiptLabel}>
+                              รอรับ {transitQty.toLocaleString()}
+                            </small>
+                          )}
                         </td>
                       );
                     })}
@@ -660,7 +675,7 @@ export function StockListPage({
                               {item.history.map((historyItem, historyIndex) => (
                                 <tr key={historyItem.id}>
                                   <td>{historyIndex + 1}</td>
-                                  <td>{historyItem.projectNo}</td>
+                                  <td>{historyItem.projectNo}{historyItem.status === 'In Transit' && <small className={styles.pendingReceiptLabel}>รอรับเข้า</small>}</td>
                                   <td>{historyItem.receiveDate}</td>
                                   <td>{historyItem.prNo}</td>
                                   <td>

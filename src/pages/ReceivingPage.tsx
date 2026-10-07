@@ -43,13 +43,9 @@ function formatBadgeCount(count: number) {
   return count > 99 ? '99+' : String(count);
 }
 
-function getDispatchItemNames(items: DispatchRecord['items']) {
-  return items.map((item) => item.itemDescription?.trim() || '-');
-}
-
 function createDispatchReceiveQtyDraft(record: DispatchRecord) {
   return record.items.reduce<Record<string, string>>((acc, item) => {
-    acc[item.stockReceiveNo] = String(item.qty);
+    acc[item.stockReceiveNo] = String(item.qty - (item.receivedQty ?? 0));
     return acc;
   }, {});
 }
@@ -514,13 +510,13 @@ export function ReceivingPage() {
     }
 
     const receivedItems = receivingIncomingDispatch.items.map((item) => {
-      const parsedQty = Number.parseInt(incomingReceiveQtyDraft[item.stockReceiveNo] ?? String(item.qty), 10);
+      const parsedQty = Number(incomingReceiveQtyDraft[item.stockReceiveNo] ?? String(item.qty - (item.receivedQty ?? 0)));
       const receivedQty = Number.isFinite(parsedQty) ? parsedQty : Number.NaN;
 
       return {
         stockReceiveNo: item.stockReceiveNo,
         itemDescription: item.itemDescription,
-        maxQty: item.qty,
+        maxQty: item.qty - (item.receivedQty ?? 0),
         receivedQty,
       };
     });
@@ -836,7 +832,7 @@ export function ReceivingPage() {
                 <div>
                   <div className={styles.projectCodeBadge}>Destination Project: {group.projectCode}</div>
                   <div className={styles.groupMeta}>
-                    {group.items.length} request(s) / {group.items.reduce((sum, record) => sum + record.totalQty, 0).toLocaleString()} qty
+                    {group.items.length} request(s)
                   </div>
                 </div>
               </div>
@@ -869,17 +865,19 @@ export function ReceivingPage() {
                         <td>{getProjectNoLastFive(record.sourceProjectNo)}</td>
                         <td>{formatDateTime(record.dispatchedAt)}</td>
                         <td>{record.transport || '-'}</td>
-                        <td>
+                        <td colSpan={2}>
                           <div className={styles.itemStack}>
-                            {getDispatchItemNames(record.items).map((itemName, index) => (
-                              <span key={`${record.id}-${index}`} className={styles.itemChip}>
-                                {itemName}
-                              </span>
+                            {record.items.map((item, index) => (
+                              <div key={`${record.id}-${index}`} className={styles.dispatchItemRow}>
+                                <span className={styles.itemChip}>
+                                  {item.itemDescription?.trim() || '-'}
+                                </span>
+                                <span className="numeric">{item.qty.toLocaleString()}</span>
+                              </div>
                             ))}
                             {record.note ? <span className={styles.noteText}>Note: {record.note}</span> : null}
                           </div>
                         </td>
-                        <td className="numeric">{record.totalQty.toLocaleString()}</td>
                         <td>{record.dispatchedByName}</td>
                         <td>
                           <StatusBadge status={record.status} />
@@ -1238,7 +1236,7 @@ export function ReceivingPage() {
                           {item.itemDescription}
                           <small>{item.itemNo}</small>
                         </span>
-                        <span className={styles.numericCell}>{item.qty.toLocaleString()}</span>
+                        <span className={styles.numericCell}>{(item.qty - (item.receivedQty ?? 0)).toLocaleString()}</span>
                       </div>
                     ))}
                   </div>
@@ -1345,7 +1343,7 @@ export function ReceivingPage() {
                           {item.itemDescription}
                           <small>{item.itemNo}</small>
                         </span>
-                        <span className={styles.numericCell}>{item.qty.toLocaleString()}</span>
+                        <span className={styles.numericCell}>{(item.qty - (item.receivedQty ?? 0)).toLocaleString()}</span>
                         <input
                           className={styles.qtyInput}
                           type="text"

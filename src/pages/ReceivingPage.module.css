@@ -342,6 +342,7 @@
 
 .dispatchTable {
   min-width: 1320px;
+  table-layout: fixed;
 }
 
 .requestIdAction {
@@ -393,43 +394,35 @@
   overflow-wrap: anywhere;
 }
 
-.dispatchTable th:nth-child(1),
-.dispatchTable td:nth-child(1) {
+.dispatchTable th:nth-child(1) {
   width: 140px;
 }
 
-.dispatchTable th:nth-child(2),
-.dispatchTable td:nth-child(2) {
+.dispatchTable th:nth-child(2) {
   width: 84px;
 }
 
-.dispatchTable th:nth-child(3),
-.dispatchTable td:nth-child(3) {
+.dispatchTable th:nth-child(3) {
   width: 128px;
 }
 
-.dispatchTable th:nth-child(4),
-.dispatchTable td:nth-child(4) {
+.dispatchTable th:nth-child(4) {
   width: 120px;
 }
 
-.dispatchTable th:nth-child(5),
-.dispatchTable td:nth-child(5) {
+.dispatchTable th:nth-child(5) {
   width: 390px;
 }
 
-.dispatchTable th:nth-child(6),
-.dispatchTable td:nth-child(6) {
+.dispatchTable th:nth-child(6) {
   width: 72px;
 }
 
-.dispatchTable th:nth-child(7),
-.dispatchTable td:nth-child(7) {
+.dispatchTable th:nth-child(7) {
   width: 118px;
 }
 
-.dispatchTable th:nth-child(8),
-.dispatchTable td:nth-child(8) {
+.dispatchTable th:nth-child(8) {
   width: 104px;
 }
 
@@ -468,6 +461,13 @@
   white-space: normal;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.dispatchItemRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 56px;
+  align-items: start;
+  gap: 16px;
 }
 
 .routeCell span {

@@ -13,6 +13,14 @@ export function normalizeMaterialNo(value: unknown) {
   return String(value ?? '').trim().toUpperCase();
 }
 
+export function createStockImportFingerprint(projectNo: string, rows: Array<{ itemNo: string; qty: number; prNo?: string; itemDescription?: string }>) {
+  const payload = JSON.stringify([projectNo.trim().toUpperCase(), rows.map(row => [
+    normalizeMaterialNo(row.itemNo), row.qty, (row.prNo ?? '').trim().toUpperCase(),
+    (row.itemDescription ?? '').trim(),
+  ]).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))]);
+  return { payload, id: `csv_${stableHash(payload)}${stableHash([...payload].reverse().join(''))}` };
+}
+
 export function assertStockIdentityMatches(
   stock: { itemNo: string; materialNo?: string },
   expectedMaterialNo: string,

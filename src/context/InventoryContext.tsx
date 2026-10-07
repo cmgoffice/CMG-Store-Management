@@ -41,10 +41,11 @@ import type {
   WithdrawRecordStatus,
   WithdrawType,
 } from '../types/models';
-import { getStockItemId, isStockItemAvailableForMovement } from '../utils/stockItem';
+import { getDispatchReceiptBalance, getStockItemId, isStockItemAvailableForMovement } from '../utils/stockItem';
 import {
   assertStockIdentityMatches,
   createStockIdentityDocumentId,
+  createStockImportFingerprint,
   normalizeMaterialNo,
 } from '../utils/stockIdentity';
 import { useAuth } from './AuthContext';
@@ -1834,6 +1835,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         if (!entitySnapshot.exists()) throw new Error('ไม่พบรายการจัดส่งต้นทาง');
         const dispatch = entitySnapshot.data() as DispatchRecord;
         if (dispatch.status !== 'Pending Receipt') throw new Error('รายการจัดส่งไม่อยู่ในสถานะที่ยกเลิกได้แล้ว');
+        if (dispatch.items.some(item => (item.receivedQty ?? 0) > 0)) throw new Error('รายการนี้รับเข้าไปบางส่วนแล้ว กรุณาทำรายการย้ายคืนแทนการยกเลิก');
         const stockIds = Array.from(new Set(dispatch.items.flatMap((item) => [
           item.sourceStockItemId || item.stockItemId || item.receiveNo,
           item.stockReceiveNo,
@@ -2295,6 +2297,10 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       }
       if (normalizeText(dispatchSnapshot.data().status) !== 'Pending Receipt') {
         throw new Error('This dispatch can no longer be cancelled.');
+      }
+      const currentDispatch = dispatchSnapshot.data() as DispatchRecord;
+      if (currentDispatch.items.some(item => (item.receivedQty ?? 0) > 0)) {
+        throw new Error('รายการนี้รับเข้าไปบางส่วนแล้ว กรุณาทำรายการย้ายคืนแทนการยกเลิก');
       }
 
       const stockIds = Array.from(new Set(target.items.flatMap((item) => [
@@ -2817,7 +2823,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     }
 
     const receivedQtyByItem = new Map(
-      (receivedItems ?? []).map((item) => [item.stockReceiveNo, Math.max(0, Math.floor(item.receivedQty))])
+      (receivedItems ?? []).map((item) => [item.stockReceiveNo, item.receivedQty])
     );
     const receivedAt = new Date().toISOString();
     const receivedByName = formatPersonName(
@@ -2843,6 +2849,8 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       );
       const destinationStockItemId = isProjectBorrowTransit
         ? `${item.stockReceiveNo}-BORROWED`
+        : item.destinationStockItemId
+        ? item.destinationStockItemId
         : existingDestinationItem
         ? getStockItemId(existingDestinationItem)
         : createStockIdentityDocumentId(destinationProjectNo, materialNo) || item.stockReceiveNo;
@@ -2857,6 +2865,15 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       }
       if (normalizeText(dispatchSnapshot.data().status) !== 'Pending Receipt') {
         return;
+      }
+      const currentDispatch = dispatchSnapshot.data() as DispatchRecord;
+      // A concurrent receipt must not reuse quantities from a stale receive dialog.
+      if (JSON.stringify(currentDispatch.items) !== JSON.stringify(target.items)) {
+        throw new Error('รายการรับเข้ามีการเปลี่ยนแปลง กรุณารีเฟรชแล้วลองใหม่');
+      }
+      if (!plans.some(plan => getDispatchReceiptBalance(plan.item.qty, plan.item.receivedQty ?? 0,
+        receivedQtyByItem.get(plan.item.stockReceiveNo)).delta > 0)) {
+        throw new Error('กรุณาระบุจำนวนรับเข้าอย่างน้อยหนึ่งรายการ');
       }
 
       const uniqueTransitIds = Array.from(new Set(plans.map((plan) => plan.item.stockReceiveNo)));
@@ -2886,24 +2903,29 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       let totalReceivedQty = 0;
 
       const receivedSnapshots = plans.map((plan) => {
+        const balance = getDispatchReceiptBalance(plan.item.qty, plan.item.receivedQty ?? 0,
+          receivedQtyByItem.get(plan.item.stockReceiveNo));
+        if (balance.delta === 0) {
+          totalReceivedQty += balance.received;
+          return { ...plan.item, materialNo: plan.materialNo, receivedQty: balance.received };
+        }
         const transitSnapshot = stockSnapshotById.get(plan.item.stockReceiveNo);
         if (!transitSnapshot?.exists()) {
           throw new Error(`In-transit stock item ${plan.item.stockReceiveNo} could not be found.`);
         }
 
         const transitStockItem = normalizeStockItem(transitSnapshot.data(), transitSnapshot.id);
-        const requestedQty = plan.item.qty;
-        const receivedQty = Math.min(
-          requestedQty,
-          receivedQtyByItem.get(plan.item.stockReceiveNo) ?? requestedQty
-        );
+        if (transitStockItem.status !== 'In Transit' || transitStockItem.qty !== plan.item.qty - (plan.item.receivedQty ?? 0)) {
+          throw new Error('ยอดระหว่างขนส่งไม่ตรงกับยอดรอรับ กรุณาตรวจสอบก่อนรับเข้า');
+        }
+        const receivedQty = balance.delta;
         const receivedAmount = calculatePartialAmount(
           transitStockItem.amount,
           transitStockItem.qty,
           receivedQty,
         );
 
-        totalReceivedQty += receivedQty;
+        totalReceivedQty += balance.received;
         if (receivedQty > 0) {
           const grouped = destinationGroups.get(plan.destinationStockItemId) ?? [];
           grouped.push({ plan, transitStockItem, receivedQty, receivedAmount });
@@ -2914,7 +2936,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
           ...plan.item,
           materialNo: plan.materialNo,
           destinationStockItemId: receivedQty > 0 ? plan.destinationStockItemId : undefined,
-          receivedQty,
+          receivedQty: balance.received,
         };
       });
 
@@ -3010,18 +3032,27 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         );
       });
 
-      uniqueTransitIds.forEach((transitId) => {
-        const isDestination = destinationGroups.has(transitId);
-        if (!isDestination) {
-          transaction.delete(doc(db, APP_NAME, 'root', 'stockItems', transitId));
-        }
+      receivedSnapshots.forEach((item) => {
+        const original = plans.find(plan => plan.item.stockReceiveNo === item.stockReceiveNo)!.item;
+        const delta = item.receivedQty - (original.receivedQty ?? 0);
+        if (delta <= 0) return;
+        const transit = stockSnapshotById.get(item.stockReceiveNo)!;
+        const transitData = transit.data()!;
+        const remaining = item.qty - item.receivedQty;
+        const transitRef = doc(db, APP_NAME, 'root', 'stockItems', item.stockReceiveNo);
+        if (remaining === 0) transaction.delete(transitRef);
+        else transaction.update(transitRef, {
+          qty: remaining,
+          amount: roundAmount(transitData.amount - calculatePartialAmount(transitData.amount, transitData.qty, delta)),
+        });
       });
 
       transaction.set(
         dispatchRef,
         {
-          status: 'Received at Site',
-          receivedAt,
+          status: receivedSnapshots.every(item => item.receivedQty === item.qty) ? 'Received at Site' : 'Pending Receipt',
+          lastReceivedAt: receivedAt,
+          ...(receivedSnapshots.every(item => item.receivedQty === item.qty) ? { receivedAt } : {}),
           receivedByName,
           receivedByEmail,
           items: receivedSnapshots,
@@ -3401,6 +3432,10 @@ export function InventoryProvider({ children }: PropsWithChildren) {
     }
 
     const chunkSize = 350;
+    // Sort before chunking so retries and reordered CSVs share the same markers.
+    assignments.sort((left, right) => left.item.itemNo.localeCompare(right.item.itemNo));
+    const fingerprint = createStockImportFingerprint(normalizedProjectNo, groupedItems);
+    let importedChunkCount = 0;
     const assignmentChunks = Array.from(
       { length: Math.ceil(assignments.length / chunkSize) },
       (_, index) => assignments.slice(index * chunkSize, (index + 1) * chunkSize),
@@ -3412,7 +3447,13 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         ? importNo
         : `${importNo}-${String(chunkIndex + 1).padStart(2, '0')}`;
       const requestRef = doc(db, APP_NAME, 'root', 'receivingRequests', requestId);
-      await runTransaction(db, async (transaction) => {
+      const importMarkerRef = doc(db, APP_NAME, 'root', 'stockImportEvents', `${fingerprint.id}-${chunkIndex}`);
+      const imported = await runTransaction(db, async (transaction) => {
+        const marker = await transaction.get(importMarkerRef);
+        if (marker.exists()) {
+          if (marker.data().payload !== fingerprint.payload) throw new Error('รหัสนำเข้าซ้ำกับข้อมูลอื่น กรุณาติดต่อผู้ดูแล');
+          return false;
+        }
         const snapshots = await Promise.all(chunkAssignments.map(({ stockItemId }) => (
           transaction.get(doc(db, APP_NAME, 'root', 'stockItems', stockItemId))
         )));
@@ -3494,8 +3535,14 @@ export function InventoryProvider({ children }: PropsWithChildren) {
         totalQty: chunkAssignments.reduce<number>((sum, { item }) => sum + item.qty, 0),
         totalAmount: 0,
         }));
+        transaction.set(importMarkerRef, {
+          payload: fingerprint.payload, requestId, projectNo: normalizedProjectNo, importedAt,
+        });
+        return true;
       });
+      if (imported) importedChunkCount += 1;
     }
+    if (!importedChunkCount) throw new Error('ข้อมูล CSV ชุดนี้นำเข้าแล้ว ระบบไม่ได้เพิ่มยอดซ้ำ');
     await logInventoryActivity('RECEIVE_IMPORT', userProfile, {
       importNo,
       projectNo: normalizedProjectNo,

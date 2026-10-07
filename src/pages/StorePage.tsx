@@ -7,6 +7,7 @@ import { getItemTypeOption, matchesItemType } from '../constants/itemTypes';
 import { useInventory } from '../context/InventoryContext';
 import { useRole } from '../context/RoleContext';
 import type { StockItem, WithdrawRecord } from '../types/models';
+import { isStockItemReadyForUse } from '../utils/stockItem';
 import '../styles/tables.css';
 import styles from './StockListPage.module.css';
 
@@ -32,6 +33,7 @@ type AggregatedStoreItem = {
   itemNo: string;
   qty: number;
   availableQty: number;
+  transitQty: number;
   repairQty: number;
   amount: number;
   searchText: string;
@@ -343,7 +345,7 @@ export function StorePage() {
         const availableQty = Math.max(
           0,
           group.items
-            .filter((item) => item.status !== 'Repair' && item.status !== 'Pending Repair')
+            .filter(isStockItemReadyForUse)
             .reduce((total, item) => total + item.qty, 0)
         );
         const repairQty = group.repairItems
@@ -468,6 +470,8 @@ export function StorePage() {
           itemNo: representative.itemNo,
           qty: group.qty,
           availableQty,
+          transitQty: group.items.filter(stockItem => stockItem.status === 'In Transit')
+            .reduce((sum, stockItem) => sum + stockItem.qty, 0),
           repairQty,
           amount: group.amount,
           searchText,
@@ -639,7 +643,8 @@ export function StorePage() {
                       </button>
                     </td>
                     <td className={`${styles.totalQtyCell} numeric ${item.qty === 0 ? 'muted' : ''}`}>
-                      {item.qty === 0 ? '-' : item.qty.toLocaleString()}
+                      {item.qty === 0 ? '-' : (item.qty - item.transitQty).toLocaleString()}
+                      {item.transitQty > 0 && <small className={styles.pendingReceiptLabel}>รอรับ {item.transitQty.toLocaleString()}</small>}
                     </td>
                     <td className={`${styles.availableCell} numeric`}>
                       {item.availableQty > 0 ? item.availableQty.toLocaleString() : ''}
