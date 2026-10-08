@@ -552,7 +552,7 @@ export function ReceivingPage() {
       setSelectedIncomingDispatch(null);
     } catch (error) {
       console.error('Failed to receive incoming dispatch:', error);
-      setIncomingReceiveError('Could not save the received quantities. Please try again.');
+      setIncomingReceiveError(error instanceof Error ? error.message : 'ไม่สามารถบันทึกจำนวนรับเข้าได้ กรุณาลองใหม่');
     } finally {
       setApprovingIncomingDispatchId(null);
     }

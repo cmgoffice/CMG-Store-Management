@@ -561,6 +561,17 @@ function projectNoMatches(left: string, right: string) {
   return left === right || normalizeProjectNoText(left) === normalizeProjectNoText(right);
 }
 
+function serializeDispatchReceiptState(dispatch: DispatchRecord) {
+  // Firestore listener and transaction reads can return map keys in different orders.
+  // Keep array order and all values significant while ignoring object key order.
+  return JSON.stringify(
+    [dispatch.items, dispatch.sourceProjectNo, dispatch.destinationProjectNo, dispatch.projectBorrowRequestId],
+    (_key, value) => value && typeof value === 'object' && !Array.isArray(value)
+      ? Object.fromEntries(Object.entries(value).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0))
+      : value,
+  );
+}
+
 function normalizeProjectNoFromRequest(data: DocumentData) {
   const projectCandidates = [
     data.projectNo,
@@ -2980,8 +2991,7 @@ export function InventoryProvider({ children }: PropsWithChildren) {
       }
       const currentDispatch = dispatchSnapshot.data() as DispatchRecord;
       // A concurrent receipt must not reuse quantities from a stale receive dialog.
-      if (JSON.stringify([currentDispatch.items, currentDispatch.sourceProjectNo, currentDispatch.destinationProjectNo, currentDispatch.projectBorrowRequestId]) !==
-          JSON.stringify([target.items, target.sourceProjectNo, target.destinationProjectNo, target.projectBorrowRequestId])) {
+      if (serializeDispatchReceiptState(currentDispatch) !== serializeDispatchReceiptState(target)) {
         throw new Error('รายการรับเข้ามีการเปลี่ยนแปลง กรุณารีเฟรชแล้วลองใหม่');
       }
       if (!plans.some(plan => getDispatchReceiptBalance(plan.item.qty, plan.item.receivedQty ?? 0,

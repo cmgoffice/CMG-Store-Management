@@ -267,6 +267,45 @@ await check('Over-receipt leaves all documents unchanged', 'PASS', async () => {
   await assert.rejects(h.operations.receiveDispatch(d.id, [{ stockReceiveNo: d.items[0].stockReceiveNo, receivedQty: 31 }]), /จำนวนรับเข้า/);
   assert.equal(JSON.stringify([...h.records]), before); return { noChanges: true };
 });
+
+test('Transfer receipt accepts reordered Firestore map keys and remains idempotent', async () => {
+  const h = harness({ [path('stockItems', 'S1')]: stock('S1') });
+  await h.operations.createDispatch(dispatchInput()); h.refresh();
+  const d = h.all('dispatchRecords')[0];
+  const reorderedItems = d.items.map(item => Object.fromEntries(Object.entries(item).reverse()));
+  assert.notEqual(JSON.stringify(reorderedItems), JSON.stringify(d.items));
+  h.mutate('dispatchRecords', d.id, { ...d, items: reorderedItems });
+  await h.operations.receiveDispatch(d.id, [{ stockReceiveNo: d.items[0].stockReceiveNo, receivedQty: 10 }]);
+  h.refresh();
+  assert.equal(h.get('dispatchRecords', d.id).totalReceivedQty, 10);
+  assert.equal(h.get('stockItems', d.items[0].stockReceiveNo).qty, 20);
+  await h.operations.receiveDispatch(d.id); h.refresh();
+  assert.equal(h.get('dispatchRecords', d.id).totalReceivedQty, 30);
+  assert.equal(h.get('dispatchRecords', d.id).status, 'Received at Site');
+  const after = JSON.stringify([...h.records]);
+  await h.operations.receiveDispatch(d.id);
+  assert.equal(JSON.stringify([...h.records]), after);
+  assert.equal(h.all('stockItems').reduce((sum, item) => sum + item.qty, 0), 100);
+});
+
+test('Transfer receipt still rejects actual changes without writing any documents', async () => {
+  for (const change of [
+    d => ({ ...d, items: d.items.map(item => ({ ...item, qty: item.qty - 1 })) }),
+    d => ({ ...d, items: d.items.map(item => ({ ...item, receivedQty: 1 })) }),
+    d => ({ ...d, items: d.items.map(item => ({ ...item, materialNo: 'OTHER' })) }),
+    d => ({ ...d, sourceProjectNo: 'J3' }),
+    d => ({ ...d, destinationProjectNo: 'J3' }),
+    d => ({ ...d, projectBorrowRequestId: 'B2' }),
+  ]) {
+    const h = harness({ [path('stockItems', 'S1')]: stock('S1') });
+    await h.operations.createDispatch(dispatchInput()); h.refresh();
+    const d = h.all('dispatchRecords')[0];
+    h.mutate('dispatchRecords', d.id, change(d));
+    const before = JSON.stringify([...h.records]);
+    await assert.rejects(h.operations.receiveDispatch(d.id), /รายการรับเข้ามีการเปลี่ยนแปลง/);
+    assert.equal(JSON.stringify([...h.records]), before);
+  }
+});
 await check('Borrow short return remains open without moving any stock', 'PASS', async () => {
   const h = harness({ [path('stockItems', 'S1')]: stock('S1', 'J1', 70), [path('stockItems', 'D1')]: stock('D1', 'J2', 10, { status: 'Borrowed' }), [path('projectBorrowRequests', 'B1')]: borrow() });
   await assert.rejects(h.operations.completeProjectBorrowReturn('B1'), /ไม่ครบ/);
